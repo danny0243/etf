@@ -5,7 +5,7 @@ node_modules/
 config/serviceAccountKey.json
 config/vapid.json
 config/push_subs.json
-config/etf_admin_config.json
+# config/etf_admin_config.json  # 已加入 git 以保存管理員設定
 # watchlist.json  # 已加入 git 以保存初始資料
 
 # 環境變數
