@@ -1,6 +1,5 @@
 // =============================================
 //   ETF 股票分析系統 — Firebase 驗證 + 管理員控制台
-//   引用與 mm.ncut.edu.tw 相同的 Firebase 專案（ncutcc-cd082）
 // =============================================
 (function () {
   'use strict';
@@ -110,7 +109,7 @@
       // 登入後才顯示主要介面 + 設定頁面標題
       document.getElementById('app-header')?.style.setProperty('display', '');
       document.getElementById('app-layout')?.style.setProperty('display', '');
-      document.title = '台灣季配息股票分析 | NCUT ETF';
+      document.title = '台灣季配息股票分析';
 
       // 隱藏登入遮罩
       overlay.classList.add('hidden');
@@ -138,7 +137,7 @@
       if (bellBtn) bellBtn.style.display = 'none';
       document.getElementById('app-header')?.style.setProperty('display', 'none');
       document.getElementById('app-layout')?.style.setProperty('display', 'none');
-      document.title = 'NCUT ETF';
+      document.title = 'ETF 股票分析';
       overlay.style.display = '';
       setTimeout(() => overlay.classList.remove('hidden'), 10);
     }
