@@ -6,7 +6,7 @@ config/serviceAccountKey.json
 config/vapid.json
 config/push_subs.json
 config/etf_admin_config.json
-watchlist.json
+# watchlist.json  # 已加入 git 以保存初始資料
 
 # 環境變數
 .env
