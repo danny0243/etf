@@ -115,6 +115,12 @@ async function verifyAccess(req) {
 
 // ── Express 認證中介層 ──────────────────────────────────────────
 async function requireAuth(req, res, next) {
+  // 允許排程器的內部呼叫（localhost）
+  const ip = req.ip || req.socket?.remoteAddress || '';
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+    req.access = { allowed: true, isAdmin: false, uid: null, email: null };
+    return next();
+  }
   try {
     req.access = await verifyAccess(req);
     next();
@@ -1016,13 +1022,74 @@ async function runExDivAlerts() {
   }
 }
 
+// ── 訊號推播（收盤後掃描買入／賣出訊號）────────────────────────
+async function runSignalAlerts() {
+  const watchlist = loadWatchlist();
+  if (!watchlist.length) return;
+
+  const buyHits  = [];
+  const sellHits = [];
+
+  for (const ticker of watchlist) {
+    try {
+      const res  = await fetch(`http://localhost:${PORT}/api/stock/${ticker}/fill-analysis`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data.hasData) continue;
+
+      const code  = ticker.replace('.TW', '');
+      const price = data.currentPrice != null ? ` ${data.currentPrice}元` : '';
+
+      if (data.signal === 'BUY' || data.signal === 'BUY_STRONG') {
+        const label = data.signal === 'BUY_STRONG' ? '強烈建議買入 🔥' : '可買進 🟢';
+        buyHits.push(`• ${code}${price}　${label}\n  ${data.signalReason || ''}`);
+      }
+
+      if (data.sellSignal === 'TAKE_PROFIT') {
+        sellHits.push(`• ${code}${price}　考慮部分賣出 🟡\n  ${data.sellReason || ''}`);
+      } else if (data.sellSignal === 'EVALUATE') {
+        sellHits.push(`• ${code}${price}　評估是否停損 🔵\n  ${data.sellReason || ''}`);
+      }
+    } catch (e) {
+      console.warn(`[Signal Alert] ${ticker} 失敗:`, e.message);
+    }
+  }
+
+  if (buyHits.length) {
+    const today = new Date().toISOString().split('T')[0];
+    await sendPushToAll({
+      title: `🟢 買入訊號提醒（${buyHits.length} 支）`,
+      body:  buyHits.join('\n'),
+      url:   '/',
+      tag:   `etf-buy-${today}`,
+    });
+    console.log(`[Signal Alert] 買入訊號推播：${buyHits.length} 支`);
+  }
+
+  if (sellHits.length) {
+    const today = new Date().toISOString().split('T')[0];
+    await sendPushToAll({
+      title: `⚠️ 賣出／停損訊號提醒（${sellHits.length} 支）`,
+      body:  sellHits.join('\n'),
+      url:   '/',
+      tag:   `etf-sell-${today}`,
+    });
+    console.log(`[Signal Alert] 賣出訊號推播：${sellHits.length} 支`);
+  }
+}
+
 setInterval(() => {
-  const now = new Date();
+  const now    = new Date();
   const twHour = (now.getUTCHours() + 8) % 24;
   const twMin  = now.getUTCMinutes();
-  // 台灣時間 08:00 整 ± 30 秒
+
+  // 台灣時間 08:00 除息提醒
   if (twHour === 8 && twMin === 0) {
     runExDivAlerts().catch(e => console.error('[ExDiv Scheduler]', e.message));
+  }
+  // 台灣時間 14:30 訊號提醒（收盤後一小時）
+  if (twHour === 14 && twMin === 30) {
+    runSignalAlerts().catch(e => console.error('[Signal Scheduler]', e.message));
   }
 }, 60_000);
 
