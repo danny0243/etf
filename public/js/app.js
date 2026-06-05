@@ -109,6 +109,8 @@ async function loadWatchlist() {
         return;
       }
       for (const sym of list) await fetchAndRenderCard(sym);
+    } else if (!list.length) {
+      container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票<br><small style="color:#7c85a2">在上方輸入代碼新增</small></div>';
     }
   } catch {
     if (!cached.length)
