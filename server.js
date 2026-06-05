@@ -1124,6 +1124,26 @@ setInterval(() => {
   }
 }, 60_000);
 
-app.listen(PORT, () => {
-  console.log(`伺服器已啟動：http://localhost:${PORT}`);
+// ── 啟動時從 GitHub 拉取最新資料，再開始監聽 ─────────────────────
+async function gitPullOnStartup() {
+  if (!process.env.GITHUB_TOKEN) return;
+  try {
+    const token  = process.env.GITHUB_TOKEN;
+    const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
+    await execAsync(`git pull ${remote} main`, { cwd: __dirname });
+    console.log('[Git] 啟動時已從 GitHub 拉取最新資料');
+  } catch (e) {
+    console.warn('[Git] 啟動時拉取失敗（使用現有資料）:', e.stderr || e.message);
+  }
+  // 重新載入設定檔（確保使用最新版本）
+  try {
+    etfConfig = JSON.parse(readFileSync(ETF_CONFIG_PATH, 'utf-8'));
+    console.log('[Git] 已重新載入 etf admin config');
+  } catch {}
+}
+
+gitPullOnStartup().finally(() => {
+  app.listen(PORT, () => {
+    console.log(`伺服器已啟動：http://localhost:${PORT}`);
+  });
 });
