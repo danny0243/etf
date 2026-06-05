@@ -4,8 +4,12 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { createRequire } from 'module';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
+
+const execAsync = promisify(exec);
 
 // web-push（CJS 套件，用 createRequire 引入）
 const _require = createRequire(import.meta.url);
@@ -39,8 +43,34 @@ try {
   writeFileSync(ETF_CONFIG_PATH, JSON.stringify(etfConfig, null, 2), 'utf-8');
 }
 
+// ── 自動 git push（設定變更後同步回 GitHub）────────────────────
+let _gitPushTimer = null;
+function scheduleGitPush(message) {
+  if (!process.env.GITHUB_TOKEN) return;
+  clearTimeout(_gitPushTimer);
+  _gitPushTimer = setTimeout(() => gitPush(message), 10_000);
+}
+
+async function gitPush(message) {
+  try {
+    const token  = process.env.GITHUB_TOKEN;
+    const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
+    await execAsync('git config user.email "etf-server@auto.push"',     { cwd: __dirname });
+    await execAsync('git config user.name "ETF Auto Push"',             { cwd: __dirname });
+    await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
+    const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
+    if (!stdout.trim()) return;
+    await execAsync(`git commit -m "${message}"`,      { cwd: __dirname });
+    await execAsync(`git push ${remote} main`,         { cwd: __dirname });
+    console.log('[Git] 自動推送成功：', message);
+  } catch (e) {
+    console.warn('[Git] 自動推送失敗:', e.stderr || e.message);
+  }
+}
+
 function saveEtfConfig() {
   writeFileSync(ETF_CONFIG_PATH, JSON.stringify(etfConfig, null, 2), 'utf-8');
+  scheduleGitPush('update: etf admin config');
 }
 
 // ── Web Push VAPID 金鑰 ──────────────────────────────────────
@@ -340,6 +370,7 @@ function loadLists() {
 
 function saveLists(lists) {
   writeFileSync(LISTS_FILE, JSON.stringify({ lists }, null, 2));
+  scheduleGitPush('update: watchlist');
 }
 
 function getList(id = 'default') {
