@@ -1,0 +1,13 @@
+node_modules/
+.claude/
+
+# 敏感設定檔（不可上傳 GitHub）
+config/serviceAccountKey.json
+config/vapid.json
+config/push_subs.json
+config/etf_admin_config.json
+watchlist.json
+
+# 環境變數
+.env
+.env.local
