@@ -96,6 +96,8 @@ async function gitPush(message) {
       return;
     }
     await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
+    // GitHub 可能已有比本機新的 commit（例如本機手動 push 過），先 rebase 再 push
+    await execAsync(`git pull --rebase ${remote} main`,      { cwd: __dirname });
     await execAsync(`git push ${remote} main`,               { cwd: __dirname });
     _syncStatus.lastPushAt      = new Date().toISOString();
     _syncStatus.lastPushResult  = 'success';
