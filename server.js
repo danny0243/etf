@@ -412,42 +412,66 @@ function getCnName(stockNo) {
   return TW_NAMES[stockNo] || null;
 }
 
-// ── 多清單 Watchlist 系統 ──────────────────────────────────────
+// ── 多清單 Watchlist 系統（每位使用者獨立）───────────────────────
 const LISTS_FILE = join(__dirname, 'watchlist.json');
 
-function loadLists() {
+// 讀取原始檔案（含舊格式自動遷移）
+function _loadRawData() {
   try {
     const raw = JSON.parse(readFileSync(LISTS_FILE, 'utf8'));
-    // 舊格式 (flat array) 自動遷移
-    if (Array.isArray(raw)) {
-      return [{ id: 'default', name: '自選股', stocks: raw }];
+    // 新格式：{ byUser: { email: { lists: [...] } } }
+    if (raw?.byUser) return raw;
+    // 舊格式：{ lists: [...] } → 遷移至管理員帳號
+    if (Array.isArray(raw?.lists)) {
+      const adminEmail = etfConfig.admins?.[0] || 'mr.yu.shiang@gmail.com';
+      return { byUser: { [adminEmail]: { lists: raw.lists } } };
     }
-    if (Array.isArray(raw.lists)) return raw.lists;
+    // 更舊格式：flat array
+    if (Array.isArray(raw)) {
+      const adminEmail = etfConfig.admins?.[0] || 'mr.yu.shiang@gmail.com';
+      return { byUser: { [adminEmail]: { lists: [{ id: 'default', name: '自選股', stocks: raw }] } } };
+    }
   } catch {}
+  return { byUser: {} };
+}
+
+// 讀取指定使用者的清單
+function loadUserLists(email) {
+  if (!email) return [{ id: 'default', name: '自選股', stocks: [] }];
+  const data = _loadRawData();
+  const userLists = data.byUser?.[email]?.lists;
+  if (Array.isArray(userLists) && userLists.length) return userLists;
   return [{ id: 'default', name: '自選股', stocks: [] }];
 }
 
-function saveLists(lists) {
-  writeFileSync(LISTS_FILE, JSON.stringify({ lists }, null, 2));
+// 儲存指定使用者的清單
+function saveUserLists(email, lists) {
+  if (!email) return;
+  const data = _loadRawData();
+  if (!data.byUser) data.byUser = {};
+  data.byUser[email] = { lists };
+  writeFileSync(LISTS_FILE, JSON.stringify(data, null, 2));
   scheduleGitPush('update: watchlist');
 }
 
-function getList(id = 'default') {
-  const all = loadLists();
+// 取得指定使用者的某一個清單
+function getUserList(email, id = 'default') {
+  const all = loadUserLists(email);
   return all.find(l => l.id === id) || all[0] || { id: 'default', name: '自選股', stocks: [] };
 }
 
-// 向後相容：取全部清單的股票聯集（push 排程用）
-function loadWatchlist() {
-  const lists = loadLists();
-  const all = new Set();
-  for (const l of lists) for (const s of l.stocks) all.add(s);
-  return [...all];
-}
-function saveWatchlist(list) {
-  const lists = loadLists();
-  if (lists.length) lists[0].stocks = list;
-  saveLists(lists);
+// 取全部使用者股票聯集（推播排程用，不區分帳號）
+function loadAllStocksForAlerts() {
+  try {
+    const data = _loadRawData();
+    const all  = new Set();
+    for (const userData of Object.values(data.byUser || {})) {
+      for (const list of (userData.lists || [])) {
+        for (const s of (list.stocks || [])) all.add(s);
+      }
+    }
+    return [...all];
+  } catch { return []; }
 }
 
 // ── 數字解析輔助：'-' 或空值視為 null ──────────────────────────
@@ -503,35 +527,39 @@ async function fetchYFChart(ticker, interval = '1wk', range = '3y') {
 
 // ── 清單管理 API ───────────────────────────────────────────────
 app.get('/api/watchlists', requireAuth, (req, res) => {
-  res.json(loadLists().map(({ id, name, stocks }) => ({ id, name, count: stocks.length })));
+  const email = req.access.email;
+  res.json(loadUserLists(email).map(({ id, name, stocks }) => ({ id, name, count: stocks.length })));
 });
 
 app.post('/api/watchlists', requireAuth, (req, res) => {
+  const email = req.access.email;
   const { name } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ error: '缺少清單名稱' });
-  const lists = loadLists();
+  const lists = loadUserLists(email);
   const id    = Date.now().toString(36);
   lists.push({ id, name: name.trim(), stocks: [] });
-  saveLists(lists);
+  saveUserLists(email, lists);
   res.json({ id, name: name.trim(), count: 0 });
 });
 
 app.put('/api/watchlists/:id', requireAuth, (req, res) => {
+  const email = req.access.email;
   const { name } = req.body || {};
-  const lists = loadLists();
+  const lists = loadUserLists(email);
   const idx   = lists.findIndex(l => l.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: '清單不存在' });
   if (name?.trim()) lists[idx].name = name.trim();
-  saveLists(lists);
+  saveUserLists(email, lists);
   res.json({ success: true });
 });
 
 app.delete('/api/watchlists/:id', requireAuth, (req, res) => {
-  const lists = loadLists();
+  const email = req.access.email;
+  const lists = loadUserLists(email);
   const filtered = lists.filter(l => l.id !== req.params.id);
   if (filtered.length === lists.length) return res.status(404).json({ error: '清單不存在' });
   if (filtered.length === 0) return res.status(400).json({ error: '至少保留一個清單' });
-  saveLists(filtered);
+  saveUserLists(email, filtered);
   res.json({ success: true });
 });
 
@@ -1013,31 +1041,34 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
 // ── 觀察清單 CRUD（需登入）────────────────────────────────────
 // 取得指定清單（支援 ?list=id，預設取第一個）
 app.get('/api/watchlist', requireAuth, (req, res) => {
-  const l = getList(req.query.list);
+  const email = req.access.email;
+  const l = getUserList(email, req.query.list);
   res.json({ listId: l.id, listName: l.name, stocks: l.stocks });
 });
 
 app.post('/api/watchlist', requireAuth, (req, res) => {
+  const email  = req.access.email;
   const { symbol } = req.body;
   const listId = req.query.list || req.body.listId;
   if (!symbol) return res.status(400).json({ error: '缺少股票代碼' });
   const ticker = toTicker(symbol);
-  const lists  = loadLists();
+  const lists  = loadUserLists(email);
   const target = lists.find(l => l.id === listId) || lists[0];
   if (!target) return res.status(404).json({ error: '清單不存在' });
   if (!target.stocks.includes(ticker)) target.stocks.push(ticker);
-  saveLists(lists);
+  saveUserLists(email, lists);
   res.json({ success: true, watchlist: target.stocks });
 });
 
 app.delete('/api/watchlist/:symbol', requireAuth, (req, res) => {
+  const email  = req.access.email;
   const ticker = toTicker(req.params.symbol);
   const listId = req.query.list;
-  const lists  = loadLists();
+  const lists  = loadUserLists(email);
   const target = lists.find(l => l.id === listId) || lists[0];
   if (!target) return res.status(404).json({ error: '清單不存在' });
   target.stocks = target.stocks.filter(s => toTicker(s) !== ticker);
-  saveLists(lists);
+  saveUserLists(email, lists);
   res.json({ success: true, watchlist: target.stocks });
 });
 
@@ -1058,7 +1089,7 @@ const ALERT_DAYS = [
 ];
 
 async function runExDivAlerts() {
-  const watchlist = loadWatchlist();
+  const watchlist = loadAllStocksForAlerts();
   if (!watchlist.length) return;
 
   // 預先計算 1、3、5 天後的日期
@@ -1114,7 +1145,7 @@ async function runExDivAlerts() {
 
 // ── 訊號推播（收盤後掃描買入／賣出訊號）────────────────────────
 async function runSignalAlerts() {
-  const watchlist = loadWatchlist();
+  const watchlist = loadAllStocksForAlerts();
   if (!watchlist.length) return;
 
   const buyHits  = [];
