@@ -45,12 +45,22 @@ try {
 
 // ── 自動 git push（設定變更後同步回 GitHub）────────────────────
 let _gitPushTimer = null;
-// _renderDeployTimer 已移除：改在 gitPush 成功後直接觸發，避免時序競爭
+
+// 同步狀態記錄（供管理員面板查詢）
+const _syncStatus = {
+  lastPushAt:      null,   // Date ISO string
+  lastPushResult:  null,   // 'success' | 'failed' | 'no_change'
+  lastPushMessage: null,   // commit message
+  lastPushError:   null,   // error message if failed
+  lastDeployAt:    null,
+  lastDeployResult: null,  // 'success' | 'failed' | 'skipped'
+  startupPullAt:   null,
+  startupPullResult: null, // 'success' | 'failed' | 'skipped'
+};
 
 function scheduleGitPush(message) {
   if (!process.env.GITHUB_TOKEN) return;
   clearTimeout(_gitPushTimer);
-  clearTimeout(_renderDeployTimer);
   // 1 秒防抖，push 完成後才觸發 Render 重新部署（避免時序競爭）
   _gitPushTimer = setTimeout(() => gitPush(message), 1_000);
 }
@@ -59,8 +69,12 @@ async function triggerRenderDeploy() {
   if (!process.env.RENDER_DEPLOY_HOOK_URL) return;
   try {
     await fetch(process.env.RENDER_DEPLOY_HOOK_URL, { method: 'POST' });
+    _syncStatus.lastDeployAt     = new Date().toISOString();
+    _syncStatus.lastDeployResult = 'success';
     console.log('[Render] 已觸發重新部署');
   } catch (e) {
+    _syncStatus.lastDeployAt     = new Date().toISOString();
+    _syncStatus.lastDeployResult = 'failed';
     console.warn('[Render] 觸發部署失敗:', e.message);
   }
 }
@@ -73,13 +87,26 @@ async function gitPush(message) {
     await execAsync('git config user.name "ETF Auto Push"',             { cwd: __dirname });
     await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
     const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
-    if (!stdout.trim()) return;
+    if (!stdout.trim()) {
+      _syncStatus.lastPushAt      = new Date().toISOString();
+      _syncStatus.lastPushResult  = 'no_change';
+      _syncStatus.lastPushMessage = message;
+      _syncStatus.lastPushError   = null;
+      return;
+    }
     await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
     await execAsync(`git push ${remote} main`,               { cwd: __dirname });
+    _syncStatus.lastPushAt      = new Date().toISOString();
+    _syncStatus.lastPushResult  = 'success';
+    _syncStatus.lastPushMessage = message;
+    _syncStatus.lastPushError   = null;
     console.log('[Git] 自動推送成功：', message);
     // ✅ push 成功後才觸發 Render 重新部署，確保 GitHub 已有最新資料
     await triggerRenderDeploy();
   } catch (e) {
+    _syncStatus.lastPushAt      = new Date().toISOString();
+    _syncStatus.lastPushResult  = 'failed';
+    _syncStatus.lastPushError   = e.stderr || e.message;
     console.warn('[Git] 自動推送失敗:', e.stderr || e.message);
   }
 }
@@ -211,6 +238,19 @@ app.post('/api/admin/config', async (req, res) => {
     etfConfig = { ...etfConfig, ...req.body };
     saveEtfConfig();
     res.json({ success: true, config: etfConfig });
+  } catch (e) { res.status(401).json({ error: e.message }); }
+});
+
+// ── 同步狀態查詢（管理員用）────────────────────────────────────
+app.get('/api/sync/status', async (req, res) => {
+  try {
+    const access = await verifyAccess(req);
+    if (!access.isAdmin) return res.status(403).json({ error: '限管理員' });
+    res.json({
+      githubToken:      !!process.env.GITHUB_TOKEN,
+      renderDeployHook: !!process.env.RENDER_DEPLOY_HOOK_URL,
+      ..._syncStatus,
+    });
   } catch (e) { res.status(401).json({ error: e.message }); }
 });
 
@@ -1142,13 +1182,21 @@ setInterval(() => {
 
 // ── 啟動時從 GitHub 拉取最新資料，再開始監聽 ─────────────────────
 async function gitPullOnStartup() {
-  if (!process.env.GITHUB_TOKEN) return;
+  if (!process.env.GITHUB_TOKEN) {
+    _syncStatus.startupPullAt     = new Date().toISOString();
+    _syncStatus.startupPullResult = 'skipped';
+    return;
+  }
   try {
     const token  = process.env.GITHUB_TOKEN;
     const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
     await execAsync(`git pull ${remote} main`, { cwd: __dirname });
+    _syncStatus.startupPullAt     = new Date().toISOString();
+    _syncStatus.startupPullResult = 'success';
     console.log('[Git] 啟動時已從 GitHub 拉取最新資料');
   } catch (e) {
+    _syncStatus.startupPullAt     = new Date().toISOString();
+    _syncStatus.startupPullResult = 'failed';
     console.warn('[Git] 啟動時拉取失敗（使用現有資料）:', e.stderr || e.message);
   }
   // 重新載入設定檔（確保使用最新版本）

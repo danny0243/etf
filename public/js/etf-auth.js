@@ -203,6 +203,60 @@
     });
   }
 
+  // ── 同步狀態顯示 ─────────────────────────────────────────────
+  async function loadSyncStatus() {
+    const panel = document.getElementById('sync-status-panel');
+    if (!panel) return;
+    panel.innerHTML = '<span style="opacity:.6">載入中…</span>';
+    try {
+      const token = await refreshToken();
+      const resp  = await fetch((window.API_BASE || '') + '/api/sync/status', {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      if (!resp.ok) { panel.innerHTML = '<span style="color:#e57373">無法取得狀態</span>'; return; }
+      const s = await resp.json();
+
+      function badge(val, okText, failText, skipText) {
+        if (val === 'success')   return `<span style="color:#81c784">✅ ${okText}</span>`;
+        if (val === 'failed')    return `<span style="color:#e57373">❌ ${failText}</span>`;
+        if (val === 'no_change') return `<span style="color:#90caf9">⏭ 無變更</span>`;
+        if (val === 'skipped')   return `<span style="color:#aaa">⚪ ${skipText}</span>`;
+        return `<span style="color:#aaa">⚪ 尚未執行</span>`;
+      }
+      function fmtTime(iso) {
+        if (!iso) return '—';
+        const d = new Date(iso);
+        return d.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+      }
+
+      panel.innerHTML = [
+        `<b>環境設定</b>`,
+        `&nbsp; GITHUB_TOKEN：${s.githubToken ? '✅ 已設定' : '❌ 未設定'}`,
+        `&nbsp; RENDER_DEPLOY_HOOK：${s.renderDeployHook ? '✅ 已設定' : '❌ 未設定'}`,
+        ``,
+        `<b>啟動時 git pull</b>`,
+        `&nbsp; 結果：${badge(s.startupPullResult, '成功', '失敗', '未設定 Token')}`,
+        `&nbsp; 時間：${fmtTime(s.startupPullAt)}`,
+        ``,
+        `<b>最後一次 git push</b>`,
+        `&nbsp; 結果：${badge(s.lastPushResult, '推送成功', '推送失敗', '—')}`,
+        `&nbsp; 時間：${fmtTime(s.lastPushAt)}`,
+        `&nbsp; 訊息：${s.lastPushMessage || '—'}`,
+        s.lastPushError ? `&nbsp; 錯誤：<span style="color:#e57373">${s.lastPushError}</span>` : '',
+        ``,
+        `<b>最後一次 Render 重新部署</b>`,
+        `&nbsp; 結果：${badge(s.lastDeployResult, '觸發成功', '觸發失敗', '未設定 Hook')}`,
+        `&nbsp; 時間：${fmtTime(s.lastDeployAt)}`,
+      ].filter(l => l !== undefined).join('<br>');
+    } catch {
+      panel.innerHTML = '<span style="color:#e57373">連線失敗</span>';
+    }
+  }
+
+  // 重新整理按鈕
+  const syncRefreshBtn = document.getElementById('sync-refresh-btn');
+  if (syncRefreshBtn) syncRefreshBtn.addEventListener('click', loadSyncStatus);
+
   // 開啟管理員面板
   if (adminBtn) {
     adminBtn.addEventListener('click', async () => {
@@ -220,6 +274,7 @@
       }
       if (togglePublic) togglePublic.checked = !!currentConfig.isPublic;
       renderAllTags();
+      loadSyncStatus();  // 開啟面板時自動載入同步狀態
     });
   }
 
@@ -270,8 +325,10 @@
           body: JSON.stringify(currentConfig)
         });
         if (resp.ok) {
-          saveResult.textContent = '✅ 設定已儲存！';
+          saveResult.textContent = '✅ 設定已儲存！正在同步到 GitHub…';
           saveResult.className = 'admin-save-result admin-save-result--ok';
+          // 3 秒後重新整理同步狀態（等 git push 完成）
+          setTimeout(loadSyncStatus, 3000);
         } else {
           const data = await resp.json().catch(() => ({}));
           saveResult.textContent = '❌ 錯誤：' + (data.error || '未知');

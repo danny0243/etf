@@ -109,6 +109,19 @@
       </button>
       <div id="admin-save-result" class="admin-save-result"></div>
 
+      <!-- 同步狀態 -->
+      <div class="admin-section" style="margin-top:8px">
+        <p class="admin-section__title">
+          <span class="material-symbols-outlined">sync</span> GitHub / Render 同步狀態
+          <button id="sync-refresh-btn" title="重新整理" style="background:none;border:none;cursor:pointer;vertical-align:middle;color:var(--md-sys-color-primary);padding:0 4px">
+            <span class="material-symbols-outlined" style="font-size:18px">refresh</span>
+          </button>
+        </p>
+        <div id="sync-status-panel" style="font-size:12px;line-height:1.9;color:var(--md-sys-color-on-surface-variant)">
+          <span style="opacity:.6">載入中…</span>
+        </div>
+      </div>
+
       <!-- 推播測試 -->
       <div class="admin-section" style="margin-top:8px">
         <p class="admin-section__title">
