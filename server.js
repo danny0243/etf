@@ -48,7 +48,7 @@ let _gitPushTimer = null;
 function scheduleGitPush(message) {
   if (!process.env.GITHUB_TOKEN) return;
   clearTimeout(_gitPushTimer);
-  _gitPushTimer = setTimeout(() => gitPush(message), 10_000);
+  _gitPushTimer = setTimeout(() => gitPush(message), 1_000);
 }
 
 async function gitPush(message) {
