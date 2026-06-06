@@ -44,22 +44,19 @@ try {
 }
 
 // ── 自動 git push（設定變更後同步回 GitHub）────────────────────
-let _gitPushTimer    = null;
-let _renderDeployTimer = null;
+let _gitPushTimer = null;
+// _renderDeployTimer 已移除：改在 gitPush 成功後直接觸發，避免時序競爭
 
 function scheduleGitPush(message) {
   if (!process.env.GITHUB_TOKEN) return;
   clearTimeout(_gitPushTimer);
   clearTimeout(_renderDeployTimer);
-  // 1 秒後備份到 GitHub（[skip ci] 不觸發 Render 自動部署）
+  // 1 秒防抖，push 完成後才觸發 Render 重新部署（避免時序競爭）
   _gitPushTimer = setTimeout(() => gitPush(message), 1_000);
-  // 10 秒後透過 Deploy Hook 通知 Render 重新部署
-  if (process.env.RENDER_DEPLOY_HOOK_URL) {
-    _renderDeployTimer = setTimeout(() => triggerRenderDeploy(), 10_000);
-  }
 }
 
 async function triggerRenderDeploy() {
+  if (!process.env.RENDER_DEPLOY_HOOK_URL) return;
   try {
     await fetch(process.env.RENDER_DEPLOY_HOOK_URL, { method: 'POST' });
     console.log('[Render] 已觸發重新部署');
@@ -78,8 +75,10 @@ async function gitPush(message) {
     const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
     if (!stdout.trim()) return;
     await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
-    await execAsync(`git push ${remote} main`,         { cwd: __dirname });
+    await execAsync(`git push ${remote} main`,               { cwd: __dirname });
     console.log('[Git] 自動推送成功：', message);
+    // ✅ push 成功後才觸發 Render 重新部署，確保 GitHub 已有最新資料
+    await triggerRenderDeploy();
   } catch (e) {
     console.warn('[Git] 自動推送失敗:', e.stderr || e.message);
   }
