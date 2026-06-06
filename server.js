@@ -225,6 +225,17 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
 
+// ── 存取權限確認（登入後第一步呼叫）─────────────────────────────
+// 200 = 有權限  /  401 = 無權限（前端應登出並顯示錯誤）
+app.get('/api/auth/check', async (req, res) => {
+  try {
+    const access = await verifyAccess(req);
+    res.json({ allowed: true, isAdmin: access.isAdmin, email: access.email });
+  } catch (e) {
+    res.status(401).json({ allowed: false, error: e.message });
+  }
+});
+
 // ── 管理員設定 API ─────────────────────────────────────────────
 app.get('/api/admin/config', async (req, res) => {
   try {

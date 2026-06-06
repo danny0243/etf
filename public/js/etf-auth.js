@@ -76,29 +76,38 @@
       catch { token = await user.getIdToken(); }
       window._fbIdToken = token;
 
-      // 向 ETF 後端確認是否為管理員
-      async function checkAdmin(retry = 0) {
+      // ── 步驟1：確認此帳號是否有存取權限 ──────────────────────
+      async function checkAccess(retry = 0) {
         try {
-          const resp = await fetch((window.API_BASE || '') + '/api/admin/config', {
+          const resp = await fetch((window.API_BASE || '') + '/api/auth/check', {
             headers: { Authorization: 'Bearer ' + window._fbIdToken }
           });
           if (resp.ok) {
-            window._fbIsAdmin = true;
-            if (adminBtn) adminBtn.style.display = 'flex';
-          } else {
-            if (resp.status === 401 && retry === 0) {
-              window._fbIdToken = await user.getIdToken(true);
-              return checkAdmin(1);
-            }
-            window._fbIsAdmin = false;
-            if (adminBtn) adminBtn.style.display = 'none';
+            const data = await resp.json();
+            window._fbIsAdmin = data.isAdmin;
+            if (adminBtn) adminBtn.style.display = data.isAdmin ? 'flex' : 'none';
+            return true;   // ✅ 有權限
           }
+          // Token 過期就重試一次
+          if (resp.status === 401 && retry === 0) {
+            window._fbIdToken = await user.getIdToken(true);
+            return checkAccess(1);
+          }
+          // 無存取權限
+          const data = await resp.json().catch(() => ({}));
+          authError.textContent = `帳號 ${user.email} 沒有存取權限，請聯絡管理員。`;
+          authError.classList.add('show');
+          await auth.signOut();
+          return false;   // ❌ 無權限，已登出
         } catch {
+          // 網路錯誤：放行（避免誤擋，伺服器端仍會驗證每個 API）
           window._fbIsAdmin = false;
           if (adminBtn) adminBtn.style.display = 'none';
+          return true;
         }
       }
-      await checkAdmin();
+      const hasAccess = await checkAccess();
+      if (!hasAccess) return;  // 已登出，不繼續
 
       // 更新 UI：顯示使用者列
       if (userAvatar) userAvatar.src = user.photoURL ||
