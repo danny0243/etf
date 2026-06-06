@@ -44,7 +44,8 @@ try {
 }
 
 // ── 自動 git push（設定變更後同步回 GitHub）────────────────────
-let _gitPushTimer = null;
+let _gitPushTimer      = null;
+let _renderDeployTimer = null; // 保留宣告避免舊版程式碼 clearTimeout 時報錯
 
 // 同步狀態記錄（供管理員面板查詢）
 const _syncStatus = {
