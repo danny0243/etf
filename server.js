@@ -60,7 +60,7 @@ async function gitPush(message) {
     await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
     const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
     if (!stdout.trim()) return;
-    await execAsync(`git commit -m "${message}"`,      { cwd: __dirname });
+    await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
     await execAsync(`git push ${remote} main`,         { cwd: __dirname });
     console.log('[Git] 自動推送成功：', message);
   } catch (e) {
