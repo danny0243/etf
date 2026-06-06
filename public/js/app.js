@@ -1,10 +1,12 @@
 const API = window.API_BASE || '';
+const SHARED_ID = '__shared__';   // 共用預設清單 id（與 server.js 同步）
 let activeSymbol = null;
 let priceChart = null;
 let refreshTimer = null;
 let watchlistData = {};
 let sortMode = 'exdiv';
-let _activeListId = localStorage.getItem('etf_active_list') || 'default';
+let _activeListId       = localStorage.getItem('etf_active_list') || SHARED_ID;
+let _activeListReadonly = false;   // 當前清單是否為唯讀（共用清單）
 
 // ── 信號優先順序 ─────────────────────────────────────────────
 const SIGNAL_RANK = { BUY_STRONG: 1, BUY: 2, WAIT_NEXT: 3, WAIT: 4, HOLD: 5, AVOID: 6, UNKNOWN: 7 };
@@ -97,6 +99,10 @@ async function loadWatchlist() {
     const res  = await apiFetch(`/api/watchlist?list=${_activeListId}`);
     const data = await res.json();
     const list = data.stocks || [];
+
+    // 更新唯讀狀態（共用清單非管理員不可新增/刪除）
+    _activeListReadonly = !!(data.readonly && !window._fbIsAdmin);
+    _updateAddStockUI();
 
     localStorage.setItem(lsKey, JSON.stringify(list));
 
@@ -198,8 +204,10 @@ async function fetchAndRenderCard(symbol) {
     const sellGainPct = fill?.sellGainPct ?? null;
 
     const code = symbol.replace('.TW', '');
+    // 唯讀清單（共用清單 + 非管理員）→ 隱藏移除按鈕
+    const canRemove = !_activeListReadonly;
     card.innerHTML = `
-      <button class="btn-remove" onclick="removeStock(event,'${symbol}')">✕</button>
+      ${canRemove ? `<button class="btn-remove" onclick="removeStock(event,'${symbol}')">✕</button>` : ''}
       <div class="card-top">
         <div class="card-identity">
           <div class="card-code">${code}</div>
@@ -223,7 +231,26 @@ async function fetchAndRenderCard(symbol) {
   }
 }
 
+// 根據唯讀狀態更新搜尋 input 的提示文字和新增按鈕的可用狀態
+function _updateAddStockUI() {
+  const input  = document.getElementById('search-input');
+  const addBtn = document.querySelector('.btn-add');
+  if (!input || !addBtn) return;
+  if (_activeListReadonly) {
+    input.placeholder  = '（共用清單由管理員管理）';
+    input.disabled     = true;
+    addBtn.disabled    = true;
+    addBtn.style.opacity = '0.4';
+  } else {
+    input.placeholder  = '輸入股票代碼（如 2330）';
+    input.disabled     = false;
+    addBtn.disabled    = false;
+    addBtn.style.opacity = '';
+  }
+}
+
 async function addStock() {
+  if (_activeListReadonly) return showToast('共用清單由管理員管理，請切換至個人清單', 'error');
   let sym = document.getElementById('search-input').value.trim().toUpperCase();
   if (!sym) return showToast('請輸入股票代碼', 'error');
   if (!sym.endsWith('.TW')) sym += '.TW';
@@ -1080,14 +1107,18 @@ async function initLists() {
       const lists = await res.json();
 
       bar.innerHTML = lists.map(l => {
-        const isActive = l.id === _activeListId;
+        const isActive   = l.id === _activeListId;
+        const isReadonly = !!l.readonly;
+        const editBtns   = isReadonly
+          ? `<span class="list-tab-readonly-badge" title="共用預設清單，管理員可管理">🔒</span>`
+          : `<button class="list-tab-rename" data-id="${l.id}" data-name="${l.name}" title="重命名">✏️</button>
+             <button class="list-tab-del" data-id="${l.id}" data-name="${l.name}" title="刪除清單">✕</button>`;
         return `
         <div class="list-tab-wrap${isActive ? ' list-tab-wrap--active' : ''}" data-id="${l.id}">
           <button class="list-tab-label" data-id="${l.id}" title="切換至「${l.name}」">
             ${l.name}<span class="list-tab-count">${l.count}</span>
           </button>
-          <button class="list-tab-rename" data-id="${l.id}" data-name="${l.name}" title="重命名">✏️</button>
-          <button class="list-tab-del" data-id="${l.id}" data-name="${l.name}" title="刪除清單">✕</button>
+          ${editBtns}
         </div>`;
       }).join('') +
       `<button class="list-tab-add" id="btn-add-list" title="新增清單">＋ 新增清單</button>`;
@@ -1097,6 +1128,10 @@ async function initLists() {
         btn.addEventListener('click', async () => {
           _activeListId = btn.dataset.id;
           localStorage.setItem('etf_active_list', _activeListId);
+          // 立即更新唯讀狀態（從 lists 陣列找）
+          const found = lists.find(l => l.id === _activeListId);
+          _activeListReadonly = !!(found?.readonly && !window._fbIsAdmin);
+          _updateAddStockUI();
           bar.querySelectorAll('.list-tab-wrap').forEach(w => w.classList.toggle('list-tab-wrap--active', w.dataset.id === _activeListId));
           watchlistData = {};
           activeSymbol = null;
