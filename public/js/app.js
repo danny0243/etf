@@ -5,7 +5,7 @@ let priceChart = null;
 let refreshTimer = null;
 let watchlistData = {};
 let sortMode = 'exdiv';
-let _activeListId       = localStorage.getItem('etf_active_list') || SHARED_ID;
+let _activeListId       = localStorage.getItem('etf_active_list') || 'default';
 let _activeListReadonly = false;   // 當前清單是否為唯讀（共用清單）
 
 // ── 信號優先順序 ─────────────────────────────────────────────
@@ -340,10 +340,7 @@ async function renderMainPanel(symbol) {
 
     if (q.error) { panel.innerHTML = `<div class="error-msg">${q.error}</div>`; return; }
 
-    const backBtn = `<button class="mobile-back-btn" onclick="mobileShowList()">
-      <span class="material-symbols-outlined">arrow_back_ios</span>返回清單
-    </button>`;
-    panel.innerHTML = backBtn + buildHeroHTML(q, div) + buildYieldHTML(q, div, fill) + buildFillHTML(fill) + buildChartHTML() + buildDividendHTML(div);
+    panel.innerHTML = buildHeroHTML(q, div) + buildYieldHTML(q, div, fill) + buildFillHTML(fill) + buildChartHTML() + buildDividendHTML(div);
 
     // 初始化日K圖 + tab 切換
     drawPriceChart(hist);
@@ -1105,6 +1102,27 @@ async function initLists() {
     try {
       const res   = await apiFetch('/api/watchlists');
       const lists = await res.json();
+
+      // 非管理員若停在共用清單，自動切到第一個個人清單（避免無法新增股票）
+      if (_activeListId === SHARED_ID && !window._fbIsAdmin) {
+        const firstPersonal = lists.find(l => !l.readonly);
+        if (firstPersonal) {
+          _activeListId = firstPersonal.id;
+          localStorage.setItem('etf_active_list', _activeListId);
+        }
+      }
+      // 確保 _activeListId 指向一個存在的清單（否則取第一個）
+      if (!lists.find(l => l.id === _activeListId)) {
+        const firstPersonal = lists.find(l => !l.readonly) || lists[0];
+        if (firstPersonal) {
+          _activeListId = firstPersonal.id;
+          localStorage.setItem('etf_active_list', _activeListId);
+        }
+      }
+      // 更新唯讀狀態
+      const activeList = lists.find(l => l.id === _activeListId);
+      _activeListReadonly = !!(activeList?.readonly && !window._fbIsAdmin);
+      _updateAddStockUI();
 
       bar.innerHTML = lists.map(l => {
         const isActive   = l.id === _activeListId;
