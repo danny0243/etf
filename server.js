@@ -84,8 +84,23 @@ async function gitPush(message) {
   try {
     const token  = process.env.GITHUB_TOKEN;
     const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
-    await execAsync('git config user.email "etf-server@auto.push"',     { cwd: __dirname });
-    await execAsync('git config user.name "ETF Auto Push"',             { cwd: __dirname });
+
+    // ① 先把最新資料讀進記憶體（後續 git 操作可能覆蓋檔案）
+    const configContent    = readFileSync(ETF_CONFIG_PATH, 'utf-8');
+    const watchlistContent = readFileSync(LISTS_FILE,      'utf-8');
+
+    await execAsync('git config user.email "etf-server@auto.push"', { cwd: __dirname });
+    await execAsync('git config user.name "ETF Auto Push"',         { cwd: __dirname });
+
+    // ② fetch + hard reset：讓本機 git 與 GitHub 完全同步，消除所有衝突風險
+    await execAsync(`git fetch ${remote} main`, { cwd: __dirname });
+    await execAsync('git reset --hard FETCH_HEAD',            { cwd: __dirname });
+
+    // ③ 把剛才讀進來的資料寫回（覆蓋掉 GitHub 舊版本）
+    writeFileSync(ETF_CONFIG_PATH, configContent,    'utf-8');
+    writeFileSync(LISTS_FILE,      watchlistContent, 'utf-8');
+
+    // ④ 確認是否真的有變更
     await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
     const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
     if (!stdout.trim()) {
@@ -95,16 +110,16 @@ async function gitPush(message) {
       _syncStatus.lastPushError   = null;
       return;
     }
+
+    // ⑤ commit & push（HEAD:main 在 detached HEAD 狀態也能用）
     await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
-    // GitHub 可能已有比本機新的 commit（例如本機手動 push 過），先 rebase 再 push
-    await execAsync(`git pull --rebase ${remote} main`,      { cwd: __dirname });
-    await execAsync(`git push ${remote} main`,               { cwd: __dirname });
+    await execAsync(`git push ${remote} HEAD:main`,          { cwd: __dirname });
     _syncStatus.lastPushAt      = new Date().toISOString();
     _syncStatus.lastPushResult  = 'success';
     _syncStatus.lastPushMessage = message;
     _syncStatus.lastPushError   = null;
     console.log('[Git] 自動推送成功：', message);
-    // ✅ push 成功後才觸發 Render 重新部署，確保 GitHub 已有最新資料
+    // ✅ push 成功後才觸發 Render 重新部署
     await triggerRenderDeploy();
   } catch (e) {
     _syncStatus.lastPushAt      = new Date().toISOString();
