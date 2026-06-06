@@ -44,11 +44,28 @@ try {
 }
 
 // ── 自動 git push（設定變更後同步回 GitHub）────────────────────
-let _gitPushTimer = null;
+let _gitPushTimer    = null;
+let _renderDeployTimer = null;
+
 function scheduleGitPush(message) {
   if (!process.env.GITHUB_TOKEN) return;
   clearTimeout(_gitPushTimer);
+  clearTimeout(_renderDeployTimer);
+  // 1 秒後備份到 GitHub（[skip ci] 不觸發 Render 自動部署）
   _gitPushTimer = setTimeout(() => gitPush(message), 1_000);
+  // 10 秒後透過 Deploy Hook 通知 Render 重新部署
+  if (process.env.RENDER_DEPLOY_HOOK_URL) {
+    _renderDeployTimer = setTimeout(() => triggerRenderDeploy(), 10_000);
+  }
+}
+
+async function triggerRenderDeploy() {
+  try {
+    await fetch(process.env.RENDER_DEPLOY_HOOK_URL, { method: 'POST' });
+    console.log('[Render] 已觸發重新部署');
+  } catch (e) {
+    console.warn('[Render] 觸發部署失敗:', e.message);
+  }
 }
 
 async function gitPush(message) {
