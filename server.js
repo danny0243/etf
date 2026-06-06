@@ -438,39 +438,56 @@ function getCnName(stockNo) {
   return TW_NAMES[stockNo] || null;
 }
 
-// ── 多清單 Watchlist 系統（每位使用者獨立）───────────────────────
-const LISTS_FILE = join(__dirname, 'watchlist.json');
+// ── 多清單 Watchlist 系統（共用清單 + 每位使用者個人清單）──────────
+const LISTS_FILE   = join(__dirname, 'watchlist.json');
+const SHARED_ID    = '__shared__';   // 共用預設清單的固定 id
 
 // 讀取原始檔案（含舊格式自動遷移）
 function _loadRawData() {
   try {
     const raw = JSON.parse(readFileSync(LISTS_FILE, 'utf8'));
-    // 新格式：{ byUser: { email: { lists: [...] } } }
+    // 新格式（v4+）：{ shared: {...}, byUser: {...} }
     if (raw?.byUser) return raw;
-    // 舊格式：{ lists: [...] } → 遷移至管理員帳號
+    // 舊格式：{ lists: [...] } → 遷移至 shared + 管理員個人帳號
     if (Array.isArray(raw?.lists)) {
       const adminEmail = etfConfig.admins?.[0] || 'mr.yu.shiang@gmail.com';
-      return { byUser: { [adminEmail]: { lists: raw.lists } } };
+      return { shared: { name: '預設股票', stocks: [] }, byUser: { [adminEmail]: { lists: raw.lists } } };
     }
-    // 更舊格式：flat array
+    // 更舊格式：flat array → 全部放進 shared
     if (Array.isArray(raw)) {
-      const adminEmail = etfConfig.admins?.[0] || 'mr.yu.shiang@gmail.com';
-      return { byUser: { [adminEmail]: { lists: [{ id: 'default', name: '自選股', stocks: raw }] } } };
+      return { shared: { name: '預設股票', stocks: raw }, byUser: {} };
     }
   } catch {}
-  return { byUser: {} };
+  return { shared: { name: '預設股票', stocks: [] }, byUser: {} };
 }
 
-// 讀取指定使用者的清單
-function loadUserLists(email) {
-  if (!email) return [{ id: 'default', name: '自選股', stocks: [] }];
+// 共用清單（所有帳號都能看到，管理員才能修改）
+function loadSharedList() {
   const data = _loadRawData();
-  const userLists = data.byUser?.[email]?.lists;
-  if (Array.isArray(userLists) && userLists.length) return userLists;
-  return [{ id: 'default', name: '自選股', stocks: [] }];
+  return { id: SHARED_ID, name: data.shared?.name || '預設股票', stocks: data.shared?.stocks || [], readonly: true };
 }
 
-// 儲存指定使用者的清單
+function saveSharedList(stocks, name) {
+  const data = _loadRawData();
+  if (!data.shared) data.shared = {};
+  data.shared.stocks = stocks;
+  if (name !== undefined) data.shared.name = name;
+  writeFileSync(LISTS_FILE, JSON.stringify(data, null, 2));
+  scheduleGitPush('update: shared watchlist');
+}
+
+// 讀取指定使用者的清單（共用清單永遠置於最前）
+function loadUserLists(email) {
+  const shared    = loadSharedList();
+  const data      = _loadRawData();
+  const userLists = data.byUser?.[email]?.lists;
+  const personal  = Array.isArray(userLists) && userLists.length
+    ? userLists
+    : [{ id: 'default', name: '自選股', stocks: [] }];
+  return [shared, ...personal];
+}
+
+// 儲存指定使用者的個人清單（不動 shared）
 function saveUserLists(email, lists) {
   if (!email) return;
   const data = _loadRawData();
@@ -480,17 +497,20 @@ function saveUserLists(email, lists) {
   scheduleGitPush('update: watchlist');
 }
 
-// 取得指定使用者的某一個清單
-function getUserList(email, id = 'default') {
+// 取得指定使用者的某一個清單（包含共用清單）
+function getUserList(email, id = SHARED_ID) {
   const all = loadUserLists(email);
   return all.find(l => l.id === id) || all[0] || { id: 'default', name: '自選股', stocks: [] };
 }
 
-// 取全部使用者股票聯集（推播排程用，不區分帳號）
+// 取全部股票聯集（推播排程用）
 function loadAllStocksForAlerts() {
   try {
     const data = _loadRawData();
     const all  = new Set();
+    // 共用清單
+    for (const s of (data.shared?.stocks || [])) all.add(s);
+    // 個人清單
     for (const userData of Object.values(data.byUser || {})) {
       for (const list of (userData.lists || [])) {
         for (const s of (list.stocks || [])) all.add(s);
@@ -554,39 +574,73 @@ async function fetchYFChart(ticker, interval = '1wk', range = '3y') {
 // ── 清單管理 API ───────────────────────────────────────────────
 app.get('/api/watchlists', requireAuth, (req, res) => {
   const email = req.access.email;
-  res.json(loadUserLists(email).map(({ id, name, stocks }) => ({ id, name, count: stocks.length })));
+  res.json(loadUserLists(email).map(({ id, name, stocks, readonly }) => ({
+    id, name, count: stocks.length, readonly: !!readonly,
+  })));
 });
 
 app.post('/api/watchlists', requireAuth, (req, res) => {
   const email = req.access.email;
   const { name } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ error: '缺少清單名稱' });
-  const lists = loadUserLists(email);
-  const id    = Date.now().toString(36);
-  lists.push({ id, name: name.trim(), stocks: [] });
-  saveUserLists(email, lists);
+  // 只取個人清單（跳過共用清單 __shared__）
+  const all      = loadUserLists(email);
+  const personal = all.filter(l => l.id !== SHARED_ID);
+  const id       = Date.now().toString(36);
+  personal.push({ id, name: name.trim(), stocks: [] });
+  saveUserLists(email, personal);
   res.json({ id, name: name.trim(), count: 0 });
 });
 
 app.put('/api/watchlists/:id', requireAuth, (req, res) => {
+  if (req.params.id === SHARED_ID) return res.status(403).json({ error: '共用清單名稱由系統管理' });
   const email = req.access.email;
   const { name } = req.body || {};
-  const lists = loadUserLists(email);
-  const idx   = lists.findIndex(l => l.id === req.params.id);
+  const all      = loadUserLists(email);
+  const personal = all.filter(l => l.id !== SHARED_ID);
+  const idx      = personal.findIndex(l => l.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: '清單不存在' });
-  if (name?.trim()) lists[idx].name = name.trim();
-  saveUserLists(email, lists);
+  if (name?.trim()) personal[idx].name = name.trim();
+  saveUserLists(email, personal);
   res.json({ success: true });
 });
 
 app.delete('/api/watchlists/:id', requireAuth, (req, res) => {
-  const email = req.access.email;
-  const lists = loadUserLists(email);
-  const filtered = lists.filter(l => l.id !== req.params.id);
-  if (filtered.length === lists.length) return res.status(404).json({ error: '清單不存在' });
-  if (filtered.length === 0) return res.status(400).json({ error: '至少保留一個清單' });
+  if (req.params.id === SHARED_ID) return res.status(403).json({ error: '共用清單無法刪除' });
+  const email    = req.access.email;
+  const all      = loadUserLists(email);
+  const personal = all.filter(l => l.id !== SHARED_ID);
+  const filtered = personal.filter(l => l.id !== req.params.id);
+  if (filtered.length === personal.length) return res.status(404).json({ error: '清單不存在' });
+  if (filtered.length === 0) return res.status(400).json({ error: '至少保留一個個人清單' });
   saveUserLists(email, filtered);
   res.json({ success: true });
+});
+
+// ── 共用清單管理（管理員限定）─────────────────────────────────────
+// POST /api/admin/shared-watchlist  body: { stocks: [...] } 或 { add: "0056.TW" } 或 { remove: "0056.TW" }
+app.post('/api/admin/shared-watchlist', async (req, res) => {
+  try {
+    const access = await verifyAccess(req);
+    if (!access.isAdmin) return res.status(403).json({ error: '限管理員操作' });
+    const { stocks, add, remove, name } = req.body || {};
+    const shared = loadSharedList();
+    let newStocks = [...shared.stocks];
+
+    if (Array.isArray(stocks)) {
+      // 整批取代
+      newStocks = stocks.map(s => toTicker(s));
+    } else if (add) {
+      const t = toTicker(add);
+      if (!newStocks.includes(t)) newStocks.push(t);
+    } else if (remove) {
+      const t = toTicker(remove);
+      newStocks = newStocks.filter(s => toTicker(s) !== t);
+    }
+
+    saveSharedList(newStocks, name);
+    res.json({ success: true, count: newStocks.length, stocks: newStocks });
+  } catch (e) { res.status(401).json({ error: e.message }); }
 });
 
 // ── 股票搜尋 ───────────────────────────────────────────────────
@@ -1065,36 +1119,66 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
 });
 
 // ── 觀察清單 CRUD（需登入）────────────────────────────────────
-// 取得指定清單（支援 ?list=id，預設取第一個）
+// 取得指定清單（支援 ?list=id，預設取第一個清單 = 共用清單）
 app.get('/api/watchlist', requireAuth, (req, res) => {
   const email = req.access.email;
   const l = getUserList(email, req.query.list);
-  res.json({ listId: l.id, listName: l.name, stocks: l.stocks });
+  res.json({ listId: l.id, listName: l.name, stocks: l.stocks, readonly: !!l.readonly });
 });
 
-app.post('/api/watchlist', requireAuth, (req, res) => {
+app.post('/api/watchlist', requireAuth, async (req, res) => {
   const email  = req.access.email;
   const { symbol } = req.body;
   const listId = req.query.list || req.body.listId;
   if (!symbol) return res.status(400).json({ error: '缺少股票代碼' });
   const ticker = toTicker(symbol);
-  const lists  = loadUserLists(email);
-  const target = lists.find(l => l.id === listId) || lists[0];
+
+  // 共用清單：僅管理員可以新增
+  if (listId === SHARED_ID) {
+    try {
+      const access = await verifyAccess(req);
+      if (!access.isAdmin) return res.status(403).json({ error: '共用清單僅管理員可修改' });
+      const shared = loadSharedList();
+      if (!shared.stocks.includes(ticker)) shared.stocks.push(ticker);
+      saveSharedList(shared.stocks);
+      return res.json({ success: true, watchlist: shared.stocks });
+    } catch (e) { return res.status(401).json({ error: e.message }); }
+  }
+
+  // 個人清單
+  const all      = loadUserLists(email);
+  const personal = all.filter(l => l.id !== SHARED_ID);
+  const target   = personal.find(l => l.id === listId) || personal[0];
   if (!target) return res.status(404).json({ error: '清單不存在' });
   if (!target.stocks.includes(ticker)) target.stocks.push(ticker);
-  saveUserLists(email, lists);
+  saveUserLists(email, personal);
   res.json({ success: true, watchlist: target.stocks });
 });
 
-app.delete('/api/watchlist/:symbol', requireAuth, (req, res) => {
+app.delete('/api/watchlist/:symbol', requireAuth, async (req, res) => {
   const email  = req.access.email;
   const ticker = toTicker(req.params.symbol);
   const listId = req.query.list;
-  const lists  = loadUserLists(email);
-  const target = lists.find(l => l.id === listId) || lists[0];
+
+  // 共用清單：僅管理員可以刪除股票
+  if (listId === SHARED_ID) {
+    try {
+      const access = await verifyAccess(req);
+      if (!access.isAdmin) return res.status(403).json({ error: '共用清單僅管理員可修改' });
+      const shared = loadSharedList();
+      shared.stocks = shared.stocks.filter(s => toTicker(s) !== ticker);
+      saveSharedList(shared.stocks);
+      return res.json({ success: true, watchlist: shared.stocks });
+    } catch (e) { return res.status(401).json({ error: e.message }); }
+  }
+
+  // 個人清單
+  const all      = loadUserLists(email);
+  const personal = all.filter(l => l.id !== SHARED_ID);
+  const target   = personal.find(l => l.id === listId) || personal[0];
   if (!target) return res.status(404).json({ error: '清單不存在' });
-  target.stocks = target.stocks.filter(s => toTicker(s) !== ticker);
-  saveUserLists(email, lists);
+  target.stocks  = target.stocks.filter(s => toTicker(s) !== ticker);
+  saveUserLists(email, personal);
   res.json({ success: true, watchlist: target.stocks });
 });
 
