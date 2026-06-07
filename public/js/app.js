@@ -1106,8 +1106,9 @@ async function initLists() {
       const res   = await apiFetch('/api/watchlists');
       const lists = await res.json();
 
-      // 非管理員若停在共用清單，自動切到第一個個人清單（避免無法新增股票）
-      if (_activeListId === SHARED_ID && !window._fbIsAdmin) {
+      // 初始化時若停在共用清單，自動切到第一個個人清單（管理員也切，
+      // 避免被鎖在無法改名的共用清單；想管理共用清單再手動點回去）
+      if (_activeListId === SHARED_ID) {
         const firstPersonal = lists.find(l => !l.readonly);
         if (firstPersonal) {
           _activeListId = firstPersonal.id;

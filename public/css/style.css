@@ -196,22 +196,24 @@ header h1 span { color: var(--accent); }
 .list-tab-wrap--active .list-tab-label { color: var(--accent); font-weight: 600; }
 .list-tab-count { font-size: .62rem; opacity: .7; background: rgba(255,255,255,.1); padding: 1px 5px; border-radius: 99px; }
 
-/* 重命名按鈕 */
+/* 重命名按鈕（非 active tab 時 hover 才顯示；active tab 常駐，手機也能用） */
 .list-tab-rename {
   padding: 5px 5px; font-size: .68rem; border: none; border-left: 1px solid var(--border);
   background: transparent; color: var(--muted); cursor: pointer; transition: color .15s, background .15s;
-  display: none;   /* hover 才顯示 */
+  display: none;
 }
 .list-tab-wrap:hover .list-tab-rename { display: flex; }
+.list-tab-wrap--active .list-tab-rename { display: flex; }   /* active tab 常駐顯示 */
 .list-tab-rename:hover { color: var(--accent2); background: rgba(0,208,132,.1); }
 
 /* 刪除按鈕 */
 .list-tab-del {
   padding: 5px 7px; font-size: .7rem; border: none; border-left: 1px solid var(--border);
   background: transparent; color: var(--muted); cursor: pointer; transition: color .15s, background .15s;
-  display: none;   /* hover 才顯示 */
+  display: none;
 }
 .list-tab-wrap:hover .list-tab-del { display: flex; }
+.list-tab-wrap--active .list-tab-del { display: flex; }      /* active tab 常駐顯示 */
 .list-tab-del:hover { color: var(--red); background: rgba(255,77,109,.1); }
 
 /* 新增清單按鈕 */
