@@ -256,42 +256,57 @@ async function addStock() {
   if (!sym) return showToast('請輸入股票代碼', 'error');
   if (!sym.endsWith('.TW')) sym += '.TW';
 
-  const res = await apiFetch(`/api/watchlist?list=${_activeListId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol: sym }),
-  });
-  const data = await res.json();
-  if (data.error) return showToast(data.error, 'error');
+  // 按鈕 loading 狀態（防重複點擊）
+  const addBtn = document.querySelector('.btn-add');
+  if (addBtn) { addBtn.disabled = true; addBtn.textContent = '…'; }
 
-  // 同步 localStorage
-  if (Array.isArray(data.watchlist)) localStorage.setItem(`etf_wl_${_activeListId}`, JSON.stringify(data.watchlist));
+  try {
+    const res = await apiFetch(`/api/watchlist?list=${_activeListId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: sym }),
+    });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, 'error'); return; }
 
-  document.getElementById('search-input').value = '';
-  showToast(`已加入 ${sym}`, 'success');
-  const wl = document.getElementById('watchlist');
-  if (wl.querySelector('.loading')) wl.innerHTML = '';
-  await fetchAndRenderCard(sym);
-  selectStock(sym);
-  await _refreshListTabs?.();   // 更新 tab 數量 badge
+    // 同步 localStorage
+    if (Array.isArray(data.watchlist)) localStorage.setItem(`etf_wl_${_activeListId}`, JSON.stringify(data.watchlist));
+
+    document.getElementById('search-input').value = '';
+    showToast(`已加入 ${sym}`, 'success');
+    const wl = document.getElementById('watchlist');
+    if (wl.querySelector('.loading')) wl.innerHTML = '';
+    await fetchAndRenderCard(sym);
+    selectStock(sym);
+    await _refreshListTabs?.();   // 更新 tab 數量 badge
+  } catch (e) {
+    if (e.message !== 'Unauthorized')
+      showToast('新增失敗：' + (e.message || '請稍後再試'), 'error');
+  } finally {
+    if (addBtn) { addBtn.disabled = false; addBtn.textContent = '＋'; }
+  }
 }
 
 async function removeStock(e, symbol) {
   e.stopPropagation();
-  const delRes = await apiFetch(`/api/watchlist/${symbol}?list=${_activeListId}`, { method: 'DELETE' });
-  try { const d = await delRes.json(); if (Array.isArray(d.watchlist)) localStorage.setItem(`etf_wl_${_activeListId}`, JSON.stringify(d.watchlist)); } catch {}
-  document.getElementById(`card-${symbol}`)?.remove();
-  delete watchlistData[symbol];
-  if (activeSymbol === symbol) {
-    activeSymbol = null;
-    document.getElementById('main-panel').innerHTML = '<div class="empty-state"><div class="icon">🔍</div><div>請選擇一支股票查看分析</div></div>';
+  try {
+    const delRes = await apiFetch(`/api/watchlist/${symbol}?list=${_activeListId}`, { method: 'DELETE' });
+    try { const d = await delRes.json(); if (Array.isArray(d.watchlist)) localStorage.setItem(`etf_wl_${_activeListId}`, JSON.stringify(d.watchlist)); } catch {}
+    document.getElementById(`card-${symbol}`)?.remove();
+    delete watchlistData[symbol];
+    if (activeSymbol === symbol) {
+      activeSymbol = null;
+      document.getElementById('main-panel').innerHTML = '<div class="empty-state"><div class="icon">🔍</div><div>請選擇一支股票查看分析</div></div>';
+    }
+    const wl = document.getElementById('watchlist');
+    if (!wl.children.length) {
+      wl.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票</div>';
+    }
+    showToast(`已移除 ${symbol}`, 'success');
+    await _refreshListTabs?.();   // 更新 tab 數量 badge
+  } catch (err) {
+    if (err.message !== 'Unauthorized') showToast('移除失敗：' + (err.message || '請稍後再試'), 'error');
   }
-  const wl = document.getElementById('watchlist');
-  if (!wl.children.length) {
-    wl.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票</div>';
-  }
-  showToast(`已移除 ${symbol}`, 'success');
-  await _refreshListTabs?.();   // 更新 tab 數量 badge
 }
 
 // Enter 鍵新增
