@@ -667,6 +667,11 @@ tr:hover td { background: var(--surface2); }
   display: none;
 }
 
+/* ── 手機返回按鈕（桌機隱藏）── */
+.mobile-back-btn {
+  display: none;
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   :root { --header-h: 56px; }

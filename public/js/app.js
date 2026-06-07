@@ -343,7 +343,10 @@ async function renderMainPanel(symbol) {
 
     if (q.error) { panel.innerHTML = `<div class="error-msg">${q.error}</div>`; return; }
 
-    panel.innerHTML = buildHeroHTML(q, div) + buildYieldHTML(q, div, fill) + buildFillHTML(fill) + buildChartHTML() + buildDividendHTML(div);
+    const backBtn = `<button class="mobile-back-btn" onclick="mobileShowList()">
+      <span class="material-symbols-outlined">arrow_back</span>返回清單
+    </button>`;
+    panel.innerHTML = backBtn + buildHeroHTML(q, div) + buildYieldHTML(q, div, fill) + buildFillHTML(fill) + buildChartHTML() + buildDividendHTML(div);
 
     // 初始化日K圖 + tab 切換
     drawPriceChart(hist);
