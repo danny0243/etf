@@ -85,22 +85,21 @@ async function gitPush(message) {
     const token  = process.env.GITHUB_TOKEN;
     const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
 
-    // ① 先把最新資料讀進記憶體（後續 git 操作可能覆蓋檔案）
-    const configContent    = readFileSync(ETF_CONFIG_PATH, 'utf-8');
-    const watchlistContent = readFileSync(LISTS_FILE,      'utf-8');
-
     await execAsync('git config user.email "etf-server@auto.push"', { cwd: __dirname });
     await execAsync('git config user.name "ETF Auto Push"',         { cwd: __dirname });
 
-    // ② fetch + hard reset：讓本機 git 與 GitHub 完全同步，消除所有衝突風險
+    // ① fetch + hard reset：讓本機 git 與 GitHub 完全同步，消除所有衝突風險
+    //   （注意：await 期間事件迴圈可能處理其他寫入請求，因此不能在 ① 之前讀檔）
     await execAsync(`git fetch ${remote} main`, { cwd: __dirname });
     await execAsync('git reset --hard FETCH_HEAD',            { cwd: __dirname });
 
-    // ③ 把剛才讀進來的資料寫回（覆蓋掉 GitHub 舊版本）
-    writeFileSync(ETF_CONFIG_PATH, configContent,    'utf-8');
-    writeFileSync(LISTS_FILE,      watchlistContent, 'utf-8');
+    // ② 從記憶體（最新狀態）寫回磁碟，覆蓋 GitHub 舊版本
+    //   etfConfig：已是 in-memory，直接序列化
+    //   _watchlistData：in-memory 快取，包含所有 await 期間的寫入
+    writeFileSync(ETF_CONFIG_PATH, JSON.stringify(etfConfig, null, 2),   'utf-8');
+    writeFileSync(LISTS_FILE,      JSON.stringify(_loadRawData(), null, 2), 'utf-8');
 
-    // ④ 確認是否真的有變更
+    // ③ 確認是否真的有變更
     await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
     const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
     if (!stdout.trim()) {
@@ -111,7 +110,7 @@ async function gitPush(message) {
       return;
     }
 
-    // ⑤ commit & push（HEAD:main 在 detached HEAD 狀態也能用）
+    // ④ commit & push（HEAD:main 在 detached HEAD 狀態也能用）
     await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
     await execAsync(`git push ${remote} HEAD:main`,          { cwd: __dirname });
     _syncStatus.lastPushAt      = new Date().toISOString();
@@ -442,23 +441,32 @@ function getCnName(stockNo) {
 const LISTS_FILE   = join(__dirname, 'watchlist.json');
 const SHARED_ID    = '__shared__';   // 共用預設清單的固定 id
 
-// 讀取原始檔案（含舊格式自動遷移）
+// ★ 記憶體快取：防止 gitPush 執行 git fetch/reset 期間讓出事件迴圈，
+//   導致其他寫入被舊資料覆蓋（TOCTOU race condition）
+let _watchlistData = null;
+
+// 讀取原始資料（優先使用記憶體快取，快取為 null 時才讀磁碟並寫入快取）
 function _loadRawData() {
+  if (_watchlistData) return _watchlistData;   // 快取命中，直接回傳
   try {
     const raw = JSON.parse(readFileSync(LISTS_FILE, 'utf8'));
     // 新格式（v4+）：{ shared: {...}, byUser: {...} }
-    if (raw?.byUser) return raw;
+    if (raw?.byUser) {
+      _watchlistData = raw;
     // 舊格式：{ lists: [...] } → 遷移至 shared + 管理員個人帳號
-    if (Array.isArray(raw?.lists)) {
+    } else if (Array.isArray(raw?.lists)) {
       const adminEmail = etfConfig.admins?.[0] || 'mr.yu.shiang@gmail.com';
-      return { shared: { name: '預設股票', stocks: [] }, byUser: { [adminEmail]: { lists: raw.lists } } };
-    }
+      _watchlistData = { shared: { name: '預設股票', stocks: [] }, byUser: { [adminEmail]: { lists: raw.lists } } };
     // 更舊格式：flat array → 全部放進 shared
-    if (Array.isArray(raw)) {
-      return { shared: { name: '預設股票', stocks: raw }, byUser: {} };
+    } else if (Array.isArray(raw)) {
+      _watchlistData = { shared: { name: '預設股票', stocks: raw }, byUser: {} };
+    } else {
+      _watchlistData = { shared: { name: '預設股票', stocks: [] }, byUser: {} };
     }
-  } catch {}
-  return { shared: { name: '預設股票', stocks: [] }, byUser: {} };
+  } catch {
+    _watchlistData = { shared: { name: '預設股票', stocks: [] }, byUser: {} };
+  }
+  return _watchlistData;
 }
 
 // 共用清單（所有帳號都能看到，管理員才能修改）
@@ -468,11 +476,11 @@ function loadSharedList() {
 }
 
 function saveSharedList(stocks, name) {
-  const data = _loadRawData();
-  if (!data.shared) data.shared = {};
-  data.shared.stocks = stocks;
-  if (name !== undefined) data.shared.name = name;
-  writeFileSync(LISTS_FILE, JSON.stringify(data, null, 2));
+  _loadRawData();   // 確保 _watchlistData 已初始化
+  if (!_watchlistData.shared) _watchlistData.shared = {};
+  _watchlistData.shared.stocks = stocks;
+  if (name !== undefined) _watchlistData.shared.name = name;
+  writeFileSync(LISTS_FILE, JSON.stringify(_watchlistData, null, 2));
   scheduleGitPush('update: shared watchlist');
 }
 
@@ -490,10 +498,10 @@ function loadUserLists(email) {
 // 儲存指定使用者的個人清單（不動 shared）
 function saveUserLists(email, lists) {
   if (!email) return;
-  const data = _loadRawData();
-  if (!data.byUser) data.byUser = {};
-  data.byUser[email] = { lists };
-  writeFileSync(LISTS_FILE, JSON.stringify(data, null, 2));
+  _loadRawData();   // 確保 _watchlistData 已初始化
+  if (!_watchlistData.byUser) _watchlistData.byUser = {};
+  _watchlistData.byUser[email] = { lists };
+  writeFileSync(LISTS_FILE, JSON.stringify(_watchlistData, null, 2));
   scheduleGitPush('update: watchlist');
 }
 
@@ -1345,8 +1353,9 @@ async function gitPullOnStartup() {
   }
   // 重新載入設定檔（確保使用最新版本）
   try {
-    etfConfig = JSON.parse(readFileSync(ETF_CONFIG_PATH, 'utf-8'));
-    console.log('[Git] 已重新載入 etf admin config');
+    etfConfig      = JSON.parse(readFileSync(ETF_CONFIG_PATH, 'utf-8'));
+    _watchlistData = null;  // 清除記憶體快取，下次 _loadRawData() 時從磁碟載入最新版
+    console.log('[Git] 已重新載入 etf admin config + watchlist');
   } catch {}
 }
 

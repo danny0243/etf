@@ -7,6 +7,7 @@ let watchlistData = {};
 let sortMode = 'exdiv';
 let _activeListId       = localStorage.getItem('etf_active_list') || 'default';
 let _activeListReadonly = false;   // 當前清單是否為唯讀（共用清單）
+let _refreshListTabs    = null;    // initLists() 完成後設定，供 addStock() 呼叫
 
 // ── 信號優先順序 ─────────────────────────────────────────────
 const SIGNAL_RANK = { BUY_STRONG: 1, BUY: 2, WAIT_NEXT: 3, WAIT: 4, HOLD: 5, AVOID: 6, UNKNOWN: 7 };
@@ -272,6 +273,7 @@ async function addStock() {
   if (wl.querySelector('.loading')) wl.innerHTML = '';
   await fetchAndRenderCard(sym);
   selectStock(sym);
+  await _refreshListTabs?.();   // 更新 tab 數量 badge
 }
 
 async function removeStock(e, symbol) {
@@ -289,6 +291,7 @@ async function removeStock(e, symbol) {
     wl.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票</div>';
   }
   showToast(`已移除 ${symbol}`, 'success');
+  await _refreshListTabs?.();   // 更新 tab 數量 badge
 }
 
 // Enter 鍵新增
@@ -1212,6 +1215,7 @@ async function initLists() {
     } catch {}
   }
 
+  _refreshListTabs = refreshListTabs;  // 暴露給外部（addStock 等）使用
   await refreshListTabs();
 }
 
