@@ -70,6 +70,102 @@ function showToast(msg, type = 'success') {
   setTimeout(() => { t.className = ''; }, 3000);
 }
 
+// ── 自訂對話框（取代 prompt / confirm，相容所有手機瀏覽器）────
+function _createModalBackdrop() {
+  const bd = document.createElement('div');
+  bd.style.cssText = [
+    'position:fixed','inset:0','background:rgba(0,0,0,.55)',
+    'z-index:99999','display:flex','align-items:center','justify-content:center',
+    'padding:16px','box-sizing:border-box'
+  ].join(';');
+  return bd;
+}
+function _createModalBox(html) {
+  const box = document.createElement('div');
+  box.style.cssText = [
+    'background:var(--surface,#1e2433)','border-radius:16px','padding:22px 20px',
+    'min-width:260px','max-width:min(400px,90vw)','width:100%',
+    'box-shadow:0 8px 40px rgba(0,0,0,.5)','color:var(--on-surface,#e4e8f0)',
+    'font-family:inherit'
+  ].join(';');
+  box.innerHTML = html;
+  return box;
+}
+
+/** 取代 prompt()：顯示輸入框，回傳 Promise<string|null> */
+function showInputModal(message, defaultValue = '') {
+  return new Promise(resolve => {
+    const bd  = _createModalBackdrop();
+    const esc = encodeURIComponent(defaultValue).replace(/%/g,'%');
+    const box = _createModalBox(`
+      <div style="font-size:.95rem;margin-bottom:14px;line-height:1.5">${message}</div>
+      <input id="_mi_input" autocomplete="off" style="
+        width:100%;box-sizing:border-box;padding:9px 12px;
+        border-radius:9px;border:1.5px solid var(--border,#2e3650);
+        background:var(--bg,#131722);color:var(--on-surface,#e4e8f0);
+        font-size:.95rem;outline:none;
+      " value="">
+      <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+        <button id="_mi_cancel" style="
+          padding:7px 16px;border-radius:9px;border:1px solid var(--border,#2e3650);
+          background:transparent;color:var(--muted,#8892a4);cursor:pointer;font-size:.9rem
+        ">取消</button>
+        <button id="_mi_ok" style="
+          padding:7px 18px;border-radius:9px;border:none;
+          background:var(--accent,#4c8dff);color:#fff;cursor:pointer;font-size:.9rem;font-weight:600
+        ">確認</button>
+      </div>
+    `);
+    bd.appendChild(box);
+    document.body.appendChild(bd);
+
+    const input = box.querySelector('#_mi_input');
+    input.value = defaultValue;
+    setTimeout(() => { input.focus(); input.select(); }, 60);
+
+    const ok = () => {
+      const v = input.value.trim();
+      document.body.removeChild(bd);
+      resolve(v || null);
+    };
+    const cancel = () => { document.body.removeChild(bd); resolve(null); };
+
+    box.querySelector('#_mi_ok').addEventListener('click', ok);
+    box.querySelector('#_mi_cancel').addEventListener('click', cancel);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); if (e.key === 'Escape') cancel(); });
+    bd.addEventListener('click', e => { if (e.target === bd) cancel(); });
+  });
+}
+
+/** 取代 confirm()：顯示確認框，回傳 Promise<boolean> */
+function showConfirmModal(message) {
+  return new Promise(resolve => {
+    const bd  = _createModalBackdrop();
+    const box = _createModalBox(`
+      <div style="font-size:.95rem;line-height:1.6;white-space:pre-line;margin-bottom:18px">${message}</div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button id="_mc_cancel" style="
+          padding:7px 16px;border-radius:9px;border:1px solid var(--border,#2e3650);
+          background:transparent;color:var(--muted,#8892a4);cursor:pointer;font-size:.9rem
+        ">取消</button>
+        <button id="_mc_ok" style="
+          padding:7px 18px;border-radius:9px;border:none;
+          background:#e05252;color:#fff;cursor:pointer;font-size:.9rem;font-weight:600
+        ">確定刪除</button>
+      </div>
+    `);
+    bd.appendChild(box);
+    document.body.appendChild(bd);
+
+    const yes  = () => { document.body.removeChild(bd); resolve(true); };
+    const no   = () => { document.body.removeChild(bd); resolve(false); };
+
+    box.querySelector('#_mc_ok').addEventListener('click', yes);
+    box.querySelector('#_mc_cancel').addEventListener('click', no);
+    bd.addEventListener('click', e => { if (e.target === bd) no(); });
+  });
+}
+
 // ── 數字格式化 ──────────────────────────────────────────────
 function fmt(n, decimals = 2) {
   if (n == null || isNaN(n)) return '—';
@@ -1184,51 +1280,56 @@ async function initLists() {
 
       // ── 重命名 ──
       bar.querySelectorAll('.list-tab-rename').forEach(btn => {
-        btn.addEventListener('click', e => {
+        btn.addEventListener('click', async e => {
           e.stopPropagation();
-          const newName = prompt(`重命名清單「${btn.dataset.name}」：`, btn.dataset.name);
-          if (!newName?.trim() || newName.trim() === btn.dataset.name) return;
-          apiFetch(`/api/watchlists/${btn.dataset.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: newName.trim() })
-          }).then(() => refreshListTabs()).catch(() => showToast('重命名失敗', 'error'));
+          const newName = await showInputModal(`重命名清單「${btn.dataset.name}」：`, btn.dataset.name);
+          if (!newName || newName === btn.dataset.name) return;
+          try {
+            await apiFetch(`/api/watchlists/${btn.dataset.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: newName })
+            });
+            await refreshListTabs();
+            showToast(`已重命名為「${newName}」`);
+          } catch { showToast('重命名失敗', 'error'); }
         });
       });
 
       // ── 刪除 ──
       bar.querySelectorAll('.list-tab-del').forEach(btn => {
-        btn.addEventListener('click', e => {
+        btn.addEventListener('click', async e => {
           e.stopPropagation();
-          if (!confirm(`確定刪除清單「${btn.dataset.name}」？\n清單內的股票也會一併移除。`)) return;
-          apiFetch(`/api/watchlists/${btn.dataset.id}`, { method: 'DELETE' })
-            .then(async r => {
-              if (!r.ok) { const d = await r.json(); return showToast(d.error || '刪除失敗', 'error'); }
-              showToast(`「${btn.dataset.name}」已刪除`);
-              if (_activeListId === btn.dataset.id) {
-                const remaining = lists.filter(l => l.id !== btn.dataset.id);
-                _activeListId = remaining[0]?.id || 'default';
-                localStorage.setItem('etf_active_list', _activeListId);
-              }
-              await refreshListTabs();
-              await loadWatchlist();
-            }).catch(() => showToast('刪除失敗', 'error'));
+          const ok = await showConfirmModal(`確定刪除清單「${btn.dataset.name}」？\n清單內的股票也會一併移除。`);
+          if (!ok) return;
+          try {
+            const r = await apiFetch(`/api/watchlists/${btn.dataset.id}`, { method: 'DELETE' });
+            if (!r.ok) { const d = await r.json(); return showToast(d.error || '刪除失敗', 'error'); }
+            showToast(`「${btn.dataset.name}」已刪除`);
+            if (_activeListId === btn.dataset.id) {
+              const remaining = lists.filter(l => l.id !== btn.dataset.id);
+              _activeListId = remaining[0]?.id || 'default';
+              localStorage.setItem('etf_active_list', _activeListId);
+            }
+            await refreshListTabs();
+            await loadWatchlist();
+          } catch { showToast('刪除失敗', 'error'); }
         });
       });
 
       // ── 新增清單 ──
       document.getElementById('btn-add-list')?.addEventListener('click', async () => {
-        const name = prompt('新清單名稱：');
-        if (!name?.trim()) return;
+        const name = await showInputModal('新清單名稱：');
+        if (!name) return;
         try {
-          const res2    = await apiFetch('/api/watchlists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
+          const res2    = await apiFetch('/api/watchlists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
           const newList = await res2.json();
           if (newList.error) return showToast(newList.error, 'error');
           _activeListId = newList.id;
           localStorage.setItem('etf_active_list', _activeListId);
           await refreshListTabs();
           await loadWatchlist();
-          showToast(`清單「${name.trim()}」已建立`);
+          showToast(`清單「${name}」已建立`);
         } catch { showToast('建立失敗', 'error'); }
       });
     } catch {}
