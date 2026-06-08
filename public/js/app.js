@@ -32,7 +32,8 @@ function lsLoad() {
 async function apiFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (window._fbIdToken) headers['Authorization'] = 'Bearer ' + window._fbIdToken;
-  const res = await fetch(API + url, { ...opts, headers });
+  // cache:'no-store' 防止瀏覽器快取 API 回應，確保每次都拿最新資料
+  const res = await fetch(API + url, { cache: 'no-store', ...opts, headers });
   if (res.status === 401) {
     showToast('請先登入才能使用此功能', 'error');
     throw new Error('Unauthorized');
@@ -1282,16 +1283,34 @@ async function initLists() {
       bar.querySelectorAll('.list-tab-rename').forEach(btn => {
         btn.addEventListener('click', async e => {
           e.stopPropagation();
-          const newName = await showInputModal(`重命名清單「${btn.dataset.name}」：`, btn.dataset.name);
-          if (!newName || newName === btn.dataset.name) return;
+          const oldName = btn.dataset.name;
+          const newName = await showInputModal(`重命名清單「${oldName}」：`, oldName);
+          if (!newName || newName === oldName) return;
           try {
-            await apiFetch(`/api/watchlists/${btn.dataset.id}`, {
+            const r = await apiFetch(`/api/watchlists/${btn.dataset.id}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ name: newName })
             });
-            await refreshListTabs();
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}));
+              return showToast(d.error || '重命名失敗', 'error');
+            }
+            // ① 立即更新 DOM，不等伺服器 round-trip
+            const wrap = bar.querySelector(`.list-tab-wrap[data-id="${btn.dataset.id}"]`);
+            if (wrap) {
+              const label = wrap.querySelector('.list-tab-label');
+              if (label) {
+                const countSpan = label.querySelector('.list-tab-count');
+                label.childNodes.forEach(n => { if (n.nodeType === Node.TEXT_NODE) n.remove(); });
+                label.insertBefore(document.createTextNode(newName), label.firstChild);
+                label.title = `切換至「${newName}」`;
+              }
+              wrap.querySelectorAll('[data-name]').forEach(el => { el.dataset.name = newName; });
+            }
             showToast(`已重命名為「${newName}」`);
+            // ② 背景同步 tabs（確保 server 資料一致）
+            refreshListTabs().catch(() => {});
           } catch { showToast('重命名失敗', 'error'); }
         });
       });
