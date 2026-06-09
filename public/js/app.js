@@ -1641,10 +1641,16 @@ window.ETFApp = {
     const _prevUser = localStorage.getItem('etf_current_user');
     const _currUser = window._fbEmail || '';
     if (_prevUser && _currUser && _prevUser !== _currUser) {
-      console.log('[ETFApp] 使用者切換:', _prevUser, '→', _currUser, '，清除 localStorage');
+      console.log('[ETFApp] 使用者切換:', _prevUser, '→', _currUser, '，清除 localStorage 與記憶體快取');
+      // localStorage 全部清除
       Object.keys(localStorage)
         .filter(k => k.startsWith('etf_'))
         .forEach(k => localStorage.removeItem(k));
+      // 記憶體上的 module-level 變數也一併歸零
+      // （app.js 讀取時就已從 localStorage 載入，localStorage 清除後仍留在記憶體）
+      _pendingLists.splice(0);
+      Object.keys(_pendingRenames).forEach(k => delete _pendingRenames[k]);
+      _activeListId = 'default';
     }
     if (_currUser) localStorage.setItem('etf_current_user', _currUser);
 
