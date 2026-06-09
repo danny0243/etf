@@ -225,6 +225,27 @@ header h1 span { color: var(--accent); }
 }
 .list-tab-add:hover { border-color: var(--accent2); color: var(--accent2); }
 
+/* ── 存檔列 ── */
+.save-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.btn-cloud-save {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 12px; font-size: .78rem; font-family: inherit;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  white-space: nowrap; transition: all .2s;
+}
+.btn-cloud-save:hover:not(:disabled) {
+  border-color: var(--accent); color: var(--accent);
+}
+.btn-cloud-save:disabled { cursor: default; opacity: .7; }
+.btn-cloud-save.saved  { border-color: #22c55e; color: #22c55e; }
+.btn-cloud-save.save-error { border-color: #ff4d6d; color: #ff4d6d; }
+.save-status { font-size: .7rem; color: var(--muted); flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
 /* 向後相容舊名稱 */
 .list-tab-count { font-size: .65rem; opacity: .7; }
 

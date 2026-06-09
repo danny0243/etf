@@ -1219,6 +1219,56 @@ async function initLists() {
   bar.className = 'list-tabs-bar';
   sidebar.insertBefore(bar, sidebar.querySelector('.sidebar-header'));
 
+  // ── 存檔按鈕（立即把清單資料存到 GitHub）──────────────────────
+  const saveRow = document.createElement('div');
+  saveRow.className = 'save-row';
+  sidebar.insertBefore(saveRow, sidebar.querySelector('.sidebar-header'));
+
+  const saveBtn = document.createElement('button');
+  saveBtn.id        = 'btn-cloud-save';
+  saveBtn.className = 'btn-cloud-save';
+  saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">cloud_upload</span> 存檔';
+  saveBtn.title     = '立即將觀察清單存至 GitHub 雲端備份';
+  saveRow.appendChild(saveBtn);
+
+  const saveStatus = document.createElement('span');
+  saveStatus.className = 'save-status';
+  saveRow.appendChild(saveStatus);
+
+  let _saveTimer = null;
+  saveBtn.addEventListener('click', async () => {
+    if (saveBtn.disabled) return;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">sync</span> 儲存中…';
+    saveStatus.textContent = '';
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    try {
+      const r = await apiFetch('/api/sync/push', { method: 'POST' });
+      const d = await r.json();
+      if (d.result === 'success') {
+        saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">cloud_done</span> 已存檔';
+        saveBtn.classList.add('saved');
+        saveStatus.textContent = '';
+      } else if (d.result === 'no_change') {
+        saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">cloud_done</span> 無變更';
+        saveBtn.classList.add('saved');
+      } else {
+        saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">cloud_off</span> 失敗';
+        saveBtn.classList.add('save-error');
+        saveStatus.textContent = d.error || '';
+      }
+    } catch {
+      saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">cloud_off</span> 失敗';
+      saveBtn.classList.add('save-error');
+    }
+    _saveTimer = setTimeout(() => {
+      saveBtn.disabled = false;
+      saveBtn.classList.remove('saved', 'save-error');
+      saveBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">cloud_upload</span> 存檔';
+      saveStatus.textContent = '';
+    }, 4000);
+  });
+
   async function refreshListTabs() {
     try {
       const res   = await apiFetch('/api/watchlists');

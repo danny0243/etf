@@ -283,6 +283,19 @@ app.get('/api/sync/status', async (req, res) => {
   } catch (e) { res.status(401).json({ error: e.message }); }
 });
 
+// 手動存檔：任何已登入用戶可觸發立即 git push（不等 1 秒 debounce）
+app.post('/api/sync/push', requireAuth, async (req, res) => {
+  // 取消尚未執行的 debounce timer
+  if (_gitPushTimer) { clearTimeout(_gitPushTimer); _gitPushTimer = null; }
+  await gitPush('manual: user save');
+  res.json({
+    result:  _syncStatus.lastPushResult,
+    at:      _syncStatus.lastPushAt,
+    message: _syncStatus.lastPushMessage,
+    error:   _syncStatus.lastPushError || null,
+  });
+});
+
 // ── Push 通知 API ─────────────────────────────────────────────
 // 取得 VAPID 公鑰（訂閱時需要）
 app.get('/api/push/vapid-public-key', requireAuth, (_req, res) => {
