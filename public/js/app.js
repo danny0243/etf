@@ -195,9 +195,13 @@ function fmtChange(v, pct) {
 async function loadWatchlist() {
   const container = document.getElementById('watchlist');
 
-  // 1. localStorage 快取立即顯示
-  const lsKey   = `etf_wl_${_activeListId}`;
-  const cached  = (() => { try { return JSON.parse(localStorage.getItem(lsKey) || '[]'); } catch { return []; } })();
+  // ── 本地資料來源 ────────────────────────────────────────────────
+  const lsKey  = `etf_wl_${_activeListId}`;
+  const delKey = `etf_del_${_activeListId}`;   // 本地明確刪除的股票清單
+  const cached  = (() => { try { return JSON.parse(localStorage.getItem(lsKey)  || '[]'); } catch { return []; } })();
+  const deleted = (() => { try { return JSON.parse(localStorage.getItem(delKey) || '[]'); } catch { return []; } })();
+
+  // 1. 立即顯示本地快取（不等伺服器）
   if (cached.length) {
     container.innerHTML = '';
     for (const sym of cached) await fetchAndRenderCard(sym);
@@ -205,35 +209,44 @@ async function loadWatchlist() {
     container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">載入中…</div>';
   }
 
-  // 2. 從伺服器同步
+  // 2. 從伺服器同步（合併策略：localStorage 永遠只增不減）
   try {
     const res  = await apiFetch(`/api/watchlist?list=${_activeListId}`);
     const data = await res.json();
     const list = data.stocks || [];
 
-    // 更新唯讀狀態（共用清單非管理員不可新增/刪除）
+    // 更新唯讀狀態
     _activeListReadonly = !!(data.readonly && !window._fbIsAdmin);
     _updateAddStockUI();
 
-    // 若伺服器傳回空清單但本地有快取，可能是 Render 新實例尚未同步資料
-    // → 保留本地顯示，不覆蓋 localStorage（防止 Ctrl+F5 後資料消失）
-    if (list.length === 0 && cached.length > 0) {
-      console.warn('[loadWatchlist] server returned empty, keeping local cache');
-      return;
+    // ── 合併策略 ────────────────────────────────────────────────
+    // 取 local ∪ server，排除本地「明確刪除」的股票
+    // 只有 removeStock() 才能讓 localStorage 變少，防止
+    // Render 新實例回傳空/舊資料把使用者剛新增的股票抹掉
+    const deletedSet = new Set(deleted);
+    const merged = [...new Set([...cached, ...list])].filter(s => !deletedSet.has(s));
+
+    // 清除已被伺服器確認刪除的暫存紀錄（server 沒有該支 = 刪除已同步）
+    if (deleted.length > 0) {
+      const stillPending = deleted.filter(s => list.includes(s));
+      stillPending.length
+        ? localStorage.setItem(delKey, JSON.stringify(stillPending))
+        : localStorage.removeItem(delKey);
     }
 
-    localStorage.setItem(lsKey, JSON.stringify(list));
+    localStorage.setItem(lsKey, JSON.stringify(merged));
 
+    // 若合併後與原本 cached 不同才重新渲染
     const cachedStr = JSON.stringify([...cached].sort());
-    const serverStr = JSON.stringify([...list].sort());
-    if (cachedStr !== serverStr) {
+    const mergedStr = JSON.stringify([...merged].sort());
+    if (cachedStr !== mergedStr) {
       container.innerHTML = '';
-      if (!list.length) {
+      if (!merged.length) {
         container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票<br><small style="color:#7c85a2">在上方輸入代碼新增</small></div>';
         return;
       }
-      for (const sym of list) await fetchAndRenderCard(sym);
-    } else if (!list.length) {
+      for (const sym of merged) await fetchAndRenderCard(sym);
+    } else if (!merged.length) {
       container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票<br><small style="color:#7c85a2">在上方輸入代碼新增</small></div>';
     }
   } catch {
@@ -386,13 +399,16 @@ async function addStock() {
     const data = await res.json();
     if (data.error) { showToast(data.error, 'error'); return; }
 
-    // 同步 localStorage：合併而非覆蓋
-    // 新 Render 實例只知道剛剛新增的那支，若直接覆蓋會抹掉本地既有的股票
+    // 同步 localStorage：合併而非覆蓋（新 Render 實例只知道剛加的那支）
     {
-      const _lk = `etf_wl_${_activeListId}`;
-      const _ex = (() => { try { return JSON.parse(localStorage.getItem(_lk) || '[]'); } catch { return []; } })();
-      const _sv = Array.isArray(data.watchlist) ? data.watchlist : [sym];
+      const _lk  = `etf_wl_${_activeListId}`;
+      const _dlk = `etf_del_${_activeListId}`;
+      const _ex  = (() => { try { return JSON.parse(localStorage.getItem(_lk)  || '[]'); } catch { return []; } })();
+      const _dl  = (() => { try { return JSON.parse(localStorage.getItem(_dlk) || '[]'); } catch { return []; } })();
+      const _sv  = Array.isArray(data.watchlist) ? data.watchlist : [sym];
       localStorage.setItem(_lk, JSON.stringify([...new Set([..._ex, ..._sv])]));
+      // 若此股票之前被刪除又重新新增，清除刪除記錄
+      if (_dl.includes(sym)) localStorage.setItem(_dlk, JSON.stringify(_dl.filter(s => s !== sym)));
     }
 
     document.getElementById('search-input').value = '';
@@ -417,11 +433,15 @@ async function removeStock(e, symbol) {
   try {
     const delRes = await apiFetch(`/api/watchlist/${symbol}?list=${_activeListId}`, { method: 'DELETE' });
     try { await delRes.json(); } catch {}   // consume body
-    // localStorage 直接刪除該支，不用伺服器回應覆蓋（防新實例傳回舊資料）
+    // localStorage 直接刪除該支（合併策略下唯一能減少股票的操作）
     {
-      const _lk = `etf_wl_${_activeListId}`;
-      const _ex = (() => { try { return JSON.parse(localStorage.getItem(_lk) || '[]'); } catch { return []; } })();
+      const _lk  = `etf_wl_${_activeListId}`;
+      const _dlk = `etf_del_${_activeListId}`;
+      const _ex  = (() => { try { return JSON.parse(localStorage.getItem(_lk)  || '[]'); } catch { return []; } })();
+      const _dl  = (() => { try { return JSON.parse(localStorage.getItem(_dlk) || '[]'); } catch { return []; } })();
       localStorage.setItem(_lk, JSON.stringify(_ex.filter(s => s !== symbol)));
+      // 記錄刪除，防止 loadWatchlist 合併時把此股票從伺服器舊資料帶回
+      if (!_dl.includes(symbol)) { _dl.push(symbol); localStorage.setItem(_dlk, JSON.stringify(_dl)); }
     }
     document.getElementById(`card-${symbol}`)?.remove();
     delete watchlistData[symbol];
