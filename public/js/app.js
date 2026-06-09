@@ -1472,40 +1472,39 @@ async function initLists() {
         });
       });
 
-      // ── 新增清單 ──
-      const _addListBtn = document.getElementById('btn-add-list');
-      if (_addListBtn) _addListBtn.addEventListener('click', async () => {
-        const name = await showInputModal('新清單名稱：');
-        if (!name) { showToast('未輸入名稱，已取消', 'error'); return; }
-
-        // 立即顯示「建立中」，讓使用者知道請求正在進行
-        showToast(`「${name}」建立中…`);
-
-        try {
-          const res2 = await apiFetch('/api/watchlists', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
-          });
-          if (!res2.ok) {
-            const d = await res2.json().catch(() => ({}));
-            return showToast(d.error || `建立失敗（HTTP ${res2.status}）`, 'error');
-          }
-          const newList = await res2.json();
-          if (newList.error) return showToast(newList.error, 'error');
-          if (!newList.id) return showToast('伺服器未回傳清單 ID，請重試', 'error');
-          _activeListId = newList.id;
-          localStorage.setItem('etf_active_list', _activeListId);
-          await refreshListTabs();
-          await loadWatchlist();
-          showToast(`清單「${name}」已建立 ✓`);
-        } catch (err) {
-          if (err.message !== 'Unauthorized')
-            showToast('建立失敗：' + (err.message || '請稍後再試'), 'error');
-        }
-      });
     } catch (e) { console.error('[refreshListTabs DOM error]', e); }
   }
+
+  // ── 新增清單（事件委任：bar 本身永久存在，innerHTML 換掉也不影響）──
+  // async function refreshListTabs() 是函式宣告，已 hoist，此處可安全呼叫
+  bar.addEventListener('click', async e => {
+    if (!e.target.closest('#btn-add-list')) return;
+    const name = await showInputModal('新清單名稱：');
+    if (!name) { showToast('未輸入名稱，已取消', 'error'); return; }
+    showToast(`「${name}」建立中…`);
+    try {
+      const res2 = await apiFetch('/api/watchlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res2.ok) {
+        const d = await res2.json().catch(() => ({}));
+        return showToast(d.error || `建立失敗（HTTP ${res2.status}）`, 'error');
+      }
+      const newList = await res2.json();
+      if (newList.error) return showToast(newList.error, 'error');
+      if (!newList.id) return showToast('伺服器未回傳清單 ID，請重試', 'error');
+      _activeListId = newList.id;
+      localStorage.setItem('etf_active_list', _activeListId);
+      await refreshListTabs();
+      await loadWatchlist();
+      showToast(`清單「${name}」已建立 ✓`);
+    } catch (err) {
+      if (err.message !== 'Unauthorized')
+        showToast('建立失敗：' + (err.message || '請稍後再試'), 'error');
+    }
+  });
 
   _refreshListTabs = refreshListTabs;  // 暴露給外部（addStock 等）使用
   await refreshListTabs();
