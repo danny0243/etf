@@ -9,8 +9,10 @@ let _activeListId       = localStorage.getItem('etf_active_list') || 'default';
 let _activeListReadonly = false;   // 當前清單是否為唯讀（共用清單）
 let _refreshListTabs    = null;    // initLists() 完成後設定，供 addStock() 呼叫
 // 本地端暫存的重命名（server round-trip 前保護 tab 名稱不被舊資料覆蓋）
-// 格式：{ listId: newName }
-const _pendingRenames   = {};
+// 格式：{ listId: newName }。持久化至 localStorage，頁面重載後仍有效
+const _pendingRenames = (() => {
+  try { return JSON.parse(localStorage.getItem('etf_pending_renames') || '{}'); } catch { return {}; }
+})();
 
 // ── 信號優先順序 ─────────────────────────────────────────────
 const SIGNAL_RANK = { BUY_STRONG: 1, BUY: 2, WAIT_NEXT: 3, WAIT: 4, HOLD: 5, AVOID: 6, UNKNOWN: 7 };
@@ -1353,6 +1355,7 @@ async function initLists() {
         if (_pendingRenames[l.id] !== undefined) {
           if (l.name === _pendingRenames[l.id]) {
             delete _pendingRenames[l.id];  // server 已確認新名稱，清除暫存
+            try { localStorage.setItem('etf_pending_renames', JSON.stringify(_pendingRenames)); } catch {}
           } else {
             l.name = _pendingRenames[l.id];  // 用本地名稱覆蓋 server 舊名稱
           }
@@ -1419,7 +1422,9 @@ async function initLists() {
               return showToast(d.error || '重命名失敗', 'error');
             }
             // ① 記錄 pending rename（保護後續 refreshListTabs 不被 server 舊資料覆蓋）
+            // 同時存進 localStorage，確保 Ctrl+F5 後仍有效
             _pendingRenames[btn.dataset.id] = newName;
+            try { localStorage.setItem('etf_pending_renames', JSON.stringify(_pendingRenames)); } catch {}
             // ② 直接更新 DOM
             const wrap = bar.querySelector(`.list-tab-wrap[data-id="${btn.dataset.id}"]`);
             if (wrap) {
@@ -1465,15 +1470,28 @@ async function initLists() {
         const name = await showInputModal('新清單名稱：');
         if (!name) return;
         try {
-          const res2    = await apiFetch('/api/watchlists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+          const res2 = await apiFetch('/api/watchlists', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+          });
+          // 明確檢查 HTTP 狀態，避免 4xx 錯誤被當成成功
+          if (!res2.ok) {
+            const d = await res2.json().catch(() => ({}));
+            return showToast(d.error || `建立失敗（HTTP ${res2.status}）`, 'error');
+          }
           const newList = await res2.json();
           if (newList.error) return showToast(newList.error, 'error');
+          if (!newList.id) return showToast('伺服器未回傳清單 ID，請重試', 'error');
           _activeListId = newList.id;
           localStorage.setItem('etf_active_list', _activeListId);
           await refreshListTabs();
           await loadWatchlist();
           showToast(`清單「${name}」已建立`);
-        } catch { showToast('建立失敗', 'error'); }
+        } catch (err) {
+          if (err.message !== 'Unauthorized')
+            showToast('建立失敗：' + (err.message || '請稍後再試'), 'error');
+        }
       });
     } catch {}
   }
