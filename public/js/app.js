@@ -1324,9 +1324,13 @@ async function initLists() {
   });
 
   async function refreshListTabs() {
+    // 網路請求獨立 try：失敗就直接 return，不影響後續 DOM
+    let lists;
     try {
-      const res   = await apiFetch('/api/watchlists');
-      const lists = await res.json();
+      const res = await apiFetch('/api/watchlists');
+      lists = await res.json();
+    } catch { return; }
+    try {
 
       // 初始化時若停在共用清單，自動切到第一個個人清單（管理員也切，
       // 避免被鎖在無法改名的共用清單；想管理共用清單再手動點回去）
@@ -1338,7 +1342,10 @@ async function initLists() {
         }
       }
       // 確保 _activeListId 指向一個存在的清單（否則取第一個）
+      // ⚠ 注意：若 _activeListId 是剛建立的新清單，伺服器應已有此 id；
+      //   若找不到，fallback 至第一個個人清單（不修改 localStorage 以保留意圖）
       if (!lists.find(l => l.id === _activeListId)) {
+        console.warn('[refreshListTabs] _activeListId not found in server list:', _activeListId, lists.map(l=>l.id));
         const firstPersonal = lists.find(l => !l.readonly) || lists[0];
         if (firstPersonal) {
           _activeListId = firstPersonal.id;
@@ -1466,16 +1473,20 @@ async function initLists() {
       });
 
       // ── 新增清單 ──
-      document.getElementById('btn-add-list')?.addEventListener('click', async () => {
+      const _addListBtn = document.getElementById('btn-add-list');
+      if (_addListBtn) _addListBtn.addEventListener('click', async () => {
         const name = await showInputModal('新清單名稱：');
-        if (!name) return;
+        if (!name) { showToast('未輸入名稱，已取消', 'error'); return; }
+
+        // 立即顯示「建立中」，讓使用者知道請求正在進行
+        showToast(`「${name}」建立中…`);
+
         try {
           const res2 = await apiFetch('/api/watchlists', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }),
           });
-          // 明確檢查 HTTP 狀態，避免 4xx 錯誤被當成成功
           if (!res2.ok) {
             const d = await res2.json().catch(() => ({}));
             return showToast(d.error || `建立失敗（HTTP ${res2.status}）`, 'error');
@@ -1487,13 +1498,13 @@ async function initLists() {
           localStorage.setItem('etf_active_list', _activeListId);
           await refreshListTabs();
           await loadWatchlist();
-          showToast(`清單「${name}」已建立`);
+          showToast(`清單「${name}」已建立 ✓`);
         } catch (err) {
           if (err.message !== 'Unauthorized')
             showToast('建立失敗：' + (err.message || '請稍後再試'), 'error');
         }
       });
-    } catch {}
+    } catch (e) { console.error('[refreshListTabs DOM error]', e); }
   }
 
   _refreshListTabs = refreshListTabs;  // 暴露給外部（addStock 等）使用
