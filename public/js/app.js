@@ -209,9 +209,10 @@ async function loadWatchlist() {
   const deleted = (() => { try { return JSON.parse(localStorage.getItem(delKey) || '[]'); } catch { return []; } })();
 
   // 1. 立即顯示本地快取（不等伺服器）
+  // Promise.all：所有卡片佔位符立即插入 DOM（保持順序），API 並行請求，不產生逐一掃描效果
   if (cached.length) {
     container.innerHTML = '';
-    for (const sym of cached) await fetchAndRenderCard(sym);
+    await Promise.all(cached.map(sym => fetchAndRenderCard(sym)));
   } else {
     container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">載入中…</div>';
   }
@@ -252,7 +253,7 @@ async function loadWatchlist() {
         container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票<br><small style="color:#7c85a2">在上方輸入代碼新增</small></div>';
         return;
       }
-      for (const sym of merged) await fetchAndRenderCard(sym);
+      await Promise.all(merged.map(sym => fetchAndRenderCard(sym)));
     } else if (!merged.length) {
       container.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票<br><small style="color:#7c85a2">在上方輸入代碼新增</small></div>';
     }
@@ -1228,7 +1229,7 @@ async function refreshAll() {
     if (Array.isArray(list)) lsSave(list);
   } catch { return; }   // 連線失敗時靜默，沿用現有 UI
   if (!Array.isArray(list)) return;
-  for (const sym of list) await fetchAndRenderCard(sym);
+  await Promise.all(list.map(sym => fetchAndRenderCard(sym)));
   if (activeSymbol && list.includes(activeSymbol)) {
     // 僅更新 hero 的即時價格，不重繪圖表
     const qRes = await apiFetch(`/api/stock/${activeSymbol}`);
