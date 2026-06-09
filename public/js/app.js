@@ -328,7 +328,14 @@ async function fetchAndRenderCard(symbol) {
     const d    = divRes.ok  ? await divRes.json()  : null;
     const fill = fillRes.ok ? await fillRes.json() : null;
 
-    if (q.error) { card.innerHTML = `<div class="symbol">${symbol}</div><div class="error-msg" style="font-size:.8rem">${q.error}</div>`; return; }
+    if (q.error) {
+      const _canRm = !_activeListReadonly;
+      card.innerHTML = `
+        ${_canRm ? `<button class="btn-remove" onclick="removeStock(event,'${symbol}')">✕</button>` : ''}
+        <div class="symbol">${symbol}</div>
+        <div class="error-msg" style="font-size:.8rem">${q.error}</div>`;
+      return;
+    }
 
     watchlistData[symbol] = { quote: q, div: d, fill };
 
@@ -366,7 +373,11 @@ async function fetchAndRenderCard(symbol) {
     // 每次卡片更新後重新套用排序
     applySort();
   } catch {
-    card.innerHTML = `<div class="symbol">${symbol}</div><div style="color:var(--muted);font-size:.8rem">資料載入失敗</div>`;
+    const _canRm = !_activeListReadonly;
+    card.innerHTML = `
+      ${_canRm ? `<button class="btn-remove" onclick="removeStock(event,'${symbol}')">✕</button>` : ''}
+      <div class="symbol">${symbol}</div>
+      <div style="color:var(--muted);font-size:.8rem">資料載入失敗</div>`;
   }
 }
 
