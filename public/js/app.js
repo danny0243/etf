@@ -386,8 +386,14 @@ async function addStock() {
     const data = await res.json();
     if (data.error) { showToast(data.error, 'error'); return; }
 
-    // 同步 localStorage
-    if (Array.isArray(data.watchlist)) localStorage.setItem(`etf_wl_${_activeListId}`, JSON.stringify(data.watchlist));
+    // 同步 localStorage：合併而非覆蓋
+    // 新 Render 實例只知道剛剛新增的那支，若直接覆蓋會抹掉本地既有的股票
+    {
+      const _lk = `etf_wl_${_activeListId}`;
+      const _ex = (() => { try { return JSON.parse(localStorage.getItem(_lk) || '[]'); } catch { return []; } })();
+      const _sv = Array.isArray(data.watchlist) ? data.watchlist : [sym];
+      localStorage.setItem(_lk, JSON.stringify([...new Set([..._ex, ..._sv])]));
+    }
 
     document.getElementById('search-input').value = '';
     showToast(`已加入 ${sym}`, 'success');
@@ -410,7 +416,13 @@ async function removeStock(e, symbol) {
   e.stopPropagation();
   try {
     const delRes = await apiFetch(`/api/watchlist/${symbol}?list=${_activeListId}`, { method: 'DELETE' });
-    try { const d = await delRes.json(); if (Array.isArray(d.watchlist)) localStorage.setItem(`etf_wl_${_activeListId}`, JSON.stringify(d.watchlist)); } catch {}
+    try { await delRes.json(); } catch {}   // consume body
+    // localStorage 直接刪除該支，不用伺服器回應覆蓋（防新實例傳回舊資料）
+    {
+      const _lk = `etf_wl_${_activeListId}`;
+      const _ex = (() => { try { return JSON.parse(localStorage.getItem(_lk) || '[]'); } catch { return []; } })();
+      localStorage.setItem(_lk, JSON.stringify(_ex.filter(s => s !== symbol)));
+    }
     document.getElementById(`card-${symbol}`)?.remove();
     delete watchlistData[symbol];
     if (activeSymbol === symbol) {
@@ -1334,10 +1346,16 @@ async function initLists() {
           ? `<span class="list-tab-readonly-badge" title="共用預設清單，管理員可管理">🔒</span>`
           : `<button class="list-tab-rename" data-id="${l.id}" data-name="${l.name}" title="重命名">✏️</button>
              <button class="list-tab-del" data-id="${l.id}" data-name="${l.name}" title="刪除清單">✕</button>`;
+        // badge：取 max(server count, localStorage 筆數)
+        // 新 Render 實例 count 可能為 0，但 localStorage 已有資料
+        const _lsCount = (() => {
+          try { return JSON.parse(localStorage.getItem(`etf_wl_${l.id}`) || '[]').length; } catch { return 0; }
+        })();
+        const _dispCount = Math.max(l.count || 0, _lsCount);
         return `
         <div class="list-tab-wrap${isActive ? ' list-tab-wrap--active' : ''}" data-id="${l.id}">
           <button class="list-tab-label" data-id="${l.id}" title="切換至「${l.name}」">
-            ${l.name}<span class="list-tab-count">${l.count}</span>
+            ${l.name}<span class="list-tab-count">${_dispCount}</span>
           </button>
           ${editBtns}
         </div>`;
