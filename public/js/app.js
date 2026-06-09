@@ -215,6 +215,13 @@ async function loadWatchlist() {
     _activeListReadonly = !!(data.readonly && !window._fbIsAdmin);
     _updateAddStockUI();
 
+    // 若伺服器傳回空清單但本地有快取，可能是 Render 新實例尚未同步資料
+    // → 保留本地顯示，不覆蓋 localStorage（防止 Ctrl+F5 後資料消失）
+    if (list.length === 0 && cached.length > 0) {
+      console.warn('[loadWatchlist] server returned empty, keeping local cache');
+      return;
+    }
+
     localStorage.setItem(lsKey, JSON.stringify(list));
 
     const cachedStr = JSON.stringify([...cached].sort());
@@ -388,9 +395,9 @@ async function addStock() {
     if (wl.querySelector('.loading')) wl.innerHTML = '';
     await fetchAndRenderCard(sym);
     selectStock(sym);
-    // 立即更新 badge（不等 server round-trip，避免新實例舊資料覆蓋）
+    // 立即更新 badge（不等 server round-trip）
+    // 注意：不再呼叫 _refreshListTabs()，避免背景拉取到 Render 新實例的 count:0 覆蓋 badge
     _updateTabBadge(_activeListId, +1);
-    _refreshListTabs?.();   // 背景同步（不 await，失敗不影響 UI）
   } catch (e) {
     if (e.message !== 'Unauthorized')
       showToast('新增失敗：' + (e.message || '請稍後再試'), 'error');
@@ -415,9 +422,8 @@ async function removeStock(e, symbol) {
       wl.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票</div>';
     }
     showToast(`已移除 ${symbol}`, 'success');
-    // 立即更新 badge
+    // 立即更新 badge（不再呼叫 _refreshListTabs，防止 count 被舊資料覆蓋）
     _updateTabBadge(_activeListId, -1);
-    _refreshListTabs?.();   // 背景同步（不 await）
   } catch (err) {
     if (err.message !== 'Unauthorized') showToast('移除失敗：' + (err.message || '請稍後再試'), 'error');
   }
