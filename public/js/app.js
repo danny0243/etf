@@ -13,6 +13,11 @@ let _refreshListTabs    = null;    // initLists() 完成後設定，供 addStock
 const _pendingRenames = (() => {
   try { return JSON.parse(localStorage.getItem('etf_pending_renames') || '{}'); } catch { return {}; }
 })();
+// 本地端暫存的新增清單（server 尚未持有 / Render 重啟後遺失時的備援）
+// 格式：[{ id, name }]。持久化至 localStorage，server 確認後自動清除
+const _pendingLists = (() => {
+  try { return JSON.parse(localStorage.getItem('etf_pending_lists') || '[]'); } catch { return []; }
+})();
 
 // ── 信號優先順序 ─────────────────────────────────────────────
 const SIGNAL_RANK = { BUY_STRONG: 1, BUY: 2, WAIT_NEXT: 3, WAIT: 4, HOLD: 5, AVOID: 6, UNKNOWN: 7 };
@@ -1336,6 +1341,24 @@ async function initLists() {
     }
     try {
 
+      // ── pending lists 合併：server 未持有的新清單從 localStorage 補回 ──
+      // Render 重啟後 in-memory 資料可能遺失，但 localStorage 仍有記錄
+      if (_pendingLists.length) {
+        const serverIds = new Set(lists.map(l => l.id));
+        for (let i = _pendingLists.length - 1; i >= 0; i--) {
+          const pl = _pendingLists[i];
+          if (serverIds.has(pl.id)) {
+            // server 已確認，從 pending 移除
+            _pendingLists.splice(i, 1);
+            try { localStorage.setItem('etf_pending_lists', JSON.stringify(_pendingLists)); } catch {}
+          } else {
+            // server 尚未持有，補入清單（顯示用）
+            const lsCount = (() => { try { return JSON.parse(localStorage.getItem(`etf_wl_${pl.id}`) || '[]').length; } catch { return 0; } })();
+            lists.push({ id: pl.id, name: pl.name, count: lsCount, readonly: false });
+          }
+        }
+      }
+
       // 初始化時若停在共用清單，自動切到第一個個人清單（管理員也切，
       // 避免被鎖在無法改名的共用清單；想管理共用清單再手動點回去）
       if (_activeListId === SHARED_ID) {
@@ -1346,8 +1369,7 @@ async function initLists() {
         }
       }
       // 確保 _activeListId 指向一個存在的清單（否則取第一個）
-      // ⚠ 注意：若 _activeListId 是剛建立的新清單，伺服器應已有此 id；
-      //   若找不到，fallback 至第一個個人清單（不修改 localStorage 以保留意圖）
+      // ⚠ pending lists は既に lists に補入済みなので、ここで見つからなければ本当に存在しない
       if (!lists.find(l => l.id === _activeListId)) {
         console.warn('[refreshListTabs] _activeListId not found in server list:', _activeListId, lists.map(l=>l.id));
         const firstPersonal = lists.find(l => !l.readonly) || lists[0];
@@ -1465,6 +1487,12 @@ async function initLists() {
             const r = await apiFetch(`/api/watchlists/${btn.dataset.id}`, { method: 'DELETE' });
             if (!r.ok) { const d = await r.json(); return showToast(d.error || '刪除失敗', 'error'); }
             showToast(`「${btn.dataset.name}」已刪除`);
+            // pending lists からも除去
+            const _pidx = _pendingLists.findIndex(l => l.id === btn.dataset.id);
+            if (_pidx !== -1) {
+              _pendingLists.splice(_pidx, 1);
+              try { localStorage.setItem('etf_pending_lists', JSON.stringify(_pendingLists)); } catch {}
+            }
             if (_activeListId === btn.dataset.id) {
               const remaining = lists.filter(l => l.id !== btn.dataset.id);
               _activeListId = remaining[0]?.id || 'default';
@@ -1502,6 +1530,12 @@ async function initLists() {
       console.log('[newList] POST 成功, id=', newList.id, 'name=', newList.name);
       _activeListId = newList.id;
       localStorage.setItem('etf_active_list', _activeListId);
+
+      // ── pending lists に追加（server 重啟後の備援）──────────────
+      if (!_pendingLists.find(l => l.id === newList.id)) {
+        _pendingLists.push({ id: newList.id, name: newList.name });
+        try { localStorage.setItem('etf_pending_lists', JSON.stringify(_pendingLists)); } catch {}
+      }
 
       // ── 樂觀更新：立即插入新標籤到 DOM ─────────────────────────
       // 避免 refreshListTabs() GET 失敗時標籤不出現
