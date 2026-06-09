@@ -1486,14 +1486,25 @@ async function initLists() {
           if (!ok) return;
           try {
             const r = await apiFetch(`/api/watchlists/${btn.dataset.id}`, { method: 'DELETE' });
-            if (!r.ok) { const d = await r.json(); return showToast(d.error || '刪除失敗', 'error'); }
+            if (!r.ok) {
+              if (r.status === 404) {
+                // 伺服器找不到（Render 重啟後 in-memory 遺失）→ 當作已刪除，清理本地端
+                console.warn('[deleteList] 404，視為已刪除，清理 localStorage:', btn.dataset.id);
+              } else {
+                const d = await r.json().catch(() => ({}));
+                return showToast(d.error || '刪除失敗', 'error');
+              }
+            }
             showToast(`「${btn.dataset.name}」已刪除`);
-            // pending lists からも除去
+            // pending lists 與 localStorage 資料一併清除
             const _pidx = _pendingLists.findIndex(l => l.id === btn.dataset.id);
             if (_pidx !== -1) {
               _pendingLists.splice(_pidx, 1);
               try { localStorage.setItem('etf_pending_lists', JSON.stringify(_pendingLists)); } catch {}
             }
+            // 清除該清單的股票快取
+            try { localStorage.removeItem(`etf_wl_${btn.dataset.id}`); } catch {}
+            try { localStorage.removeItem(`etf_del_${btn.dataset.id}`); } catch {}
             if (_activeListId === btn.dataset.id) {
               const remaining = lists.filter(l => l.id !== btn.dataset.id);
               _activeListId = remaining[0]?.id || 'default';
