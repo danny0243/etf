@@ -118,8 +118,9 @@ async function gitPush(message) {
     _syncStatus.lastPushMessage = message;
     _syncStatus.lastPushError   = null;
     console.log('[Git] 自動推送成功：', message);
-    // ✅ push 成功後才觸發 Render 重新部署
-    await triggerRenderDeploy();
+    // 注意：資料推送（watchlist / config）不再觸發 Render 重新部署。
+    // 每次 redeploy 都會建立新實例讀 GitHub 舊資料，反而造成改名/新增被覆蓋。
+    // 程式碼更新時由 Render Dashboard 或 GitHub auto-deploy 手動觸發部署即可。
   } catch (e) {
     _syncStatus.lastPushAt      = new Date().toISOString();
     _syncStatus.lastPushResult  = 'failed';

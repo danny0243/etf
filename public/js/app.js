@@ -8,6 +8,9 @@ let sortMode = 'exdiv';
 let _activeListId       = localStorage.getItem('etf_active_list') || 'default';
 let _activeListReadonly = false;   // 當前清單是否為唯讀（共用清單）
 let _refreshListTabs    = null;    // initLists() 完成後設定，供 addStock() 呼叫
+// 本地端暫存的重命名（server round-trip 前保護 tab 名稱不被舊資料覆蓋）
+// 格式：{ listId: newName }
+const _pendingRenames   = {};
 
 // ── 信號優先順序 ─────────────────────────────────────────────
 const SIGNAL_RANK = { BUY_STRONG: 1, BUY: 2, WAIT_NEXT: 3, WAIT: 4, HOLD: 5, AVOID: 6, UNKNOWN: 7 };
@@ -1243,6 +1246,17 @@ async function initLists() {
       _activeListReadonly = !!(activeList?.readonly && !window._fbIsAdmin);
       _updateAddStockUI();
 
+      // 套用本地暫存的重命名（server 尚未確認前不讓舊名稱覆蓋）
+      lists.forEach(l => {
+        if (_pendingRenames[l.id] !== undefined) {
+          if (l.name === _pendingRenames[l.id]) {
+            delete _pendingRenames[l.id];  // server 已確認新名稱，清除暫存
+          } else {
+            l.name = _pendingRenames[l.id];  // 用本地名稱覆蓋 server 舊名稱
+          }
+        }
+      });
+
       bar.innerHTML = lists.map(l => {
         const isActive   = l.id === _activeListId;
         const isReadonly = !!l.readonly;
@@ -1296,18 +1310,20 @@ async function initLists() {
               const d = await r.json().catch(() => ({}));
               return showToast(d.error || '重命名失敗', 'error');
             }
-            // 直接更新 DOM（不做 server round-trip，避免 Render 重啟時新實例讀舊 GitHub 資料覆寫回來）
+            // ① 記錄 pending rename（保護後續 refreshListTabs 不被 server 舊資料覆蓋）
+            _pendingRenames[btn.dataset.id] = newName;
+            // ② 直接更新 DOM
             const wrap = bar.querySelector(`.list-tab-wrap[data-id="${btn.dataset.id}"]`);
             if (wrap) {
               const label = wrap.querySelector('.list-tab-label');
               if (label) {
-                label.childNodes.forEach(n => { if (n.nodeType === Node.TEXT_NODE) n.remove(); });
+                Array.from(label.childNodes).forEach(n => { if (n.nodeType === Node.TEXT_NODE) n.remove(); });
                 label.insertBefore(document.createTextNode(newName), label.firstChild);
                 label.title = `切換至「${newName}」`;
               }
               wrap.querySelectorAll('[data-name]').forEach(el => { el.dataset.name = newName; });
             }
-            // 同步更新 lists 快取（供 tab 切換時的 readonly 判斷使用）
+            // ③ 同步更新 lists 快取（供 tab 切換時的 readonly 判斷使用）
             const cached = lists.find(l => l.id === btn.dataset.id);
             if (cached) cached.name = newName;
             showToast(`已重命名為「${newName}」`);
