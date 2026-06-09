@@ -1329,7 +1329,11 @@ async function initLists() {
     try {
       const res = await apiFetch('/api/watchlists');
       lists = await res.json();
-    } catch { return; }
+      console.log('[refreshListTabs] 取得清單:', lists.map(l => `${l.name}(${l.id})`).join(', '));
+    } catch (err) {
+      console.warn('[refreshListTabs] GET /api/watchlists 失敗:', err?.message || err);
+      return;
+    }
     try {
 
       // 初始化時若停在共用清單，自動切到第一個個人清單（管理員也切，
@@ -1495,8 +1499,29 @@ async function initLists() {
       const newList = await res2.json();
       if (newList.error) return showToast(newList.error, 'error');
       if (!newList.id) return showToast('伺服器未回傳清單 ID，請重試', 'error');
+      console.log('[newList] POST 成功, id=', newList.id, 'name=', newList.name);
       _activeListId = newList.id;
       localStorage.setItem('etf_active_list', _activeListId);
+
+      // ── 樂觀更新：立即插入新標籤到 DOM ─────────────────────────
+      // 避免 refreshListTabs() GET 失敗時標籤不出現
+      bar.querySelectorAll('.list-tab-wrap').forEach(w => w.classList.remove('list-tab-wrap--active'));
+      const _optWrap = document.createElement('div');
+      _optWrap.className = 'list-tab-wrap list-tab-wrap--active';
+      _optWrap.dataset.id = newList.id;
+      _optWrap.innerHTML = `
+        <button class="list-tab-label" data-id="${newList.id}" title="切換至「${newList.name}」">
+          ${newList.name}<span class="list-tab-count">0</span>
+        </button>
+        <button class="list-tab-rename" data-id="${newList.id}" data-name="${newList.name}" title="重命名">✏️</button>
+        <button class="list-tab-del" data-id="${newList.id}" data-name="${newList.name}" title="刪除清單">✕</button>
+      `;
+      const _optAddBtn = bar.querySelector('#btn-add-list');
+      if (_optAddBtn) bar.insertBefore(_optWrap, _optAddBtn);
+      else bar.appendChild(_optWrap);
+      // ────────────────────────────────────────────────────────────
+
+      // 同步伺服器狀態（失敗也不影響，標籤已顯示）
       await refreshListTabs();
       await loadWatchlist();
       showToast(`清單「${name}」已建立 ✓`);
