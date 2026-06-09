@@ -1296,21 +1296,21 @@ async function initLists() {
               const d = await r.json().catch(() => ({}));
               return showToast(d.error || '重命名失敗', 'error');
             }
-            // ① 立即更新 DOM，不等伺服器 round-trip
+            // 直接更新 DOM（不做 server round-trip，避免 Render 重啟時新實例讀舊 GitHub 資料覆寫回來）
             const wrap = bar.querySelector(`.list-tab-wrap[data-id="${btn.dataset.id}"]`);
             if (wrap) {
               const label = wrap.querySelector('.list-tab-label');
               if (label) {
-                const countSpan = label.querySelector('.list-tab-count');
                 label.childNodes.forEach(n => { if (n.nodeType === Node.TEXT_NODE) n.remove(); });
                 label.insertBefore(document.createTextNode(newName), label.firstChild);
                 label.title = `切換至「${newName}」`;
               }
               wrap.querySelectorAll('[data-name]').forEach(el => { el.dataset.name = newName; });
             }
+            // 同步更新 lists 快取（供 tab 切換時的 readonly 判斷使用）
+            const cached = lists.find(l => l.id === btn.dataset.id);
+            if (cached) cached.name = newName;
             showToast(`已重命名為「${newName}」`);
-            // ② 背景同步 tabs（確保 server 資料一致）
-            refreshListTabs().catch(() => {});
           } catch { showToast('重命名失敗', 'error'); }
         });
       });
