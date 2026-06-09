@@ -1637,6 +1637,17 @@ function initSearch() {
 
 window.ETFApp = {
   async start() {
+    // ── 使用者切換偵測：不同帳號登入時清除前一位使用者的 localStorage ──
+    const _prevUser = localStorage.getItem('etf_current_user');
+    const _currUser = window._fbEmail || '';
+    if (_prevUser && _currUser && _prevUser !== _currUser) {
+      console.log('[ETFApp] 使用者切換:', _prevUser, '→', _currUser, '，清除 localStorage');
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('etf_'))
+        .forEach(k => localStorage.removeItem(k));
+    }
+    if (_currUser) localStorage.setItem('etf_current_user', _currUser);
+
     initHeaderCollapse();
     await initLists();
     initSearch();

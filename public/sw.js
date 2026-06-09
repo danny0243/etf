@@ -3,15 +3,15 @@
    功能：離線快取 + 推播通知接收
    ============================================================ */
 
-const CACHE = 'etf-shell-v20260609o';
+const CACHE = 'etf-shell-v20260609p';
 const SHELL = [
   '/',
-  '/css/style.css?v=20260609o',
-  '/css/auth.css?v=20260609o',
-  '/js/app.js?v=20260609o',
-  '/js/etf-auth.js?v=20260609o',
-  '/js/pwa.js?v=20260609o',
-  '/js/config.js?v=20260609o',
+  '/css/style.css?v=20260609p',
+  '/css/auth.css?v=20260609p',
+  '/js/app.js?v=20260609p',
+  '/js/etf-auth.js?v=20260609p',
+  '/js/pwa.js?v=20260609p',
+  '/js/config.js?v=20260609p',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
 ];

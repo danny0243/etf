@@ -75,6 +75,7 @@
       try { token = await user.getIdToken(true); }
       catch { token = await user.getIdToken(); }
       window._fbIdToken = token;
+      window._fbEmail   = user.email || '';   // 供 ETFApp.start() 判斷使用者切換
 
       // ── 步驟1：確認此帳號是否有存取權限 ──────────────────────
       async function checkAccess(retry = 0) {
