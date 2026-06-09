@@ -66,6 +66,16 @@ function updateClock() {
 setInterval(updateClock, 1000);
 updateClock();
 
+// ── Tab badge 即時更新（不依賴 server round-trip）──────────────
+function _updateTabBadge(listId, delta) {
+  const badge = document.querySelector(
+    `.list-tab-wrap[data-id="${listId}"] .list-tab-count`
+  );
+  if (!badge) return;
+  const current = parseInt(badge.textContent, 10);
+  if (!isNaN(current)) badge.textContent = Math.max(0, current + delta);
+}
+
 // ── Toast 通知 ──────────────────────────────────────────────
 function showToast(msg, type = 'success') {
   const t = document.getElementById('toast');
@@ -378,7 +388,9 @@ async function addStock() {
     if (wl.querySelector('.loading')) wl.innerHTML = '';
     await fetchAndRenderCard(sym);
     selectStock(sym);
-    await _refreshListTabs?.();   // 更新 tab 數量 badge
+    // 立即更新 badge（不等 server round-trip，避免新實例舊資料覆蓋）
+    _updateTabBadge(_activeListId, +1);
+    _refreshListTabs?.();   // 背景同步（不 await，失敗不影響 UI）
   } catch (e) {
     if (e.message !== 'Unauthorized')
       showToast('新增失敗：' + (e.message || '請稍後再試'), 'error');
@@ -403,7 +415,9 @@ async function removeStock(e, symbol) {
       wl.innerHTML = '<div class="loading" style="padding:20px;text-align:center">尚無觀察股票</div>';
     }
     showToast(`已移除 ${symbol}`, 'success');
-    await _refreshListTabs?.();   // 更新 tab 數量 badge
+    // 立即更新 badge
+    _updateTabBadge(_activeListId, -1);
+    _refreshListTabs?.();   // 背景同步（不 await）
   } catch (err) {
     if (err.message !== 'Unauthorized') showToast('移除失敗：' + (err.message || '請稍後再試'), 'error');
   }

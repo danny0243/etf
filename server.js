@@ -80,52 +80,73 @@ async function triggerRenderDeploy() {
   }
 }
 
+let _gitPushRunning = false;   // 防止並行 gitPush 造成 non-fast-forward 失敗
+
 async function gitPush(message) {
-  try {
-    const token  = process.env.GITHUB_TOKEN;
-    const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
+  // ── 若已有一個 push 正在跑，排隊等待（最多等 15 秒）──────────
+  if (_gitPushRunning) {
+    const deadline = Date.now() + 15_000;
+    await new Promise(resolve => {
+      const poll = setInterval(() => {
+        if (!_gitPushRunning || Date.now() > deadline) { clearInterval(poll); resolve(); }
+      }, 300);
+    });
+  }
+  _gitPushRunning = true;
 
-    await execAsync('git config user.email "etf-server@auto.push"', { cwd: __dirname });
-    await execAsync('git config user.name "ETF Auto Push"',         { cwd: __dirname });
+  const MAX_RETRY = 3;
+  for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+    try {
+      const token  = process.env.GITHUB_TOKEN;
+      const remote = `https://x-access-token:${token}@github.com/danny0243/etf.git`;
 
-    // ① fetch + hard reset：讓本機 git 與 GitHub 完全同步，消除所有衝突風險
-    //   （注意：await 期間事件迴圈可能處理其他寫入請求，因此不能在 ① 之前讀檔）
-    await execAsync(`git fetch ${remote} main`, { cwd: __dirname });
-    await execAsync('git reset --hard FETCH_HEAD',            { cwd: __dirname });
+      await execAsync('git config user.email "etf-server@auto.push"', { cwd: __dirname });
+      await execAsync('git config user.name "ETF Auto Push"',         { cwd: __dirname });
 
-    // ② 從記憶體（最新狀態）寫回磁碟，覆蓋 GitHub 舊版本
-    //   etfConfig：已是 in-memory，直接序列化
-    //   _watchlistData：in-memory 快取，包含所有 await 期間的寫入
-    writeFileSync(ETF_CONFIG_PATH, JSON.stringify(etfConfig, null, 2),   'utf-8');
-    writeFileSync(LISTS_FILE,      JSON.stringify(_loadRawData(), null, 2), 'utf-8');
+      // ① fetch + hard reset（每次重試都重新 fetch，確保 HEAD 在最新 commit）
+      await execAsync(`git fetch ${remote} main`, { cwd: __dirname });
+      await execAsync('git reset --hard FETCH_HEAD',            { cwd: __dirname });
 
-    // ③ 確認是否真的有變更
-    await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
-    const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
-    if (!stdout.trim()) {
+      // ② 從記憶體（最新狀態）寫回磁碟
+      writeFileSync(ETF_CONFIG_PATH, JSON.stringify(etfConfig, null, 2),   'utf-8');
+      writeFileSync(LISTS_FILE,      JSON.stringify(_loadRawData(), null, 2), 'utf-8');
+
+      // ③ 確認是否真的有變更
+      await execAsync('git add config/etf_admin_config.json watchlist.json', { cwd: __dirname });
+      const { stdout } = await execAsync('git diff --cached --name-only', { cwd: __dirname });
+      if (!stdout.trim()) {
+        _syncStatus.lastPushAt      = new Date().toISOString();
+        _syncStatus.lastPushResult  = 'no_change';
+        _syncStatus.lastPushMessage = message;
+        _syncStatus.lastPushError   = null;
+        _gitPushRunning = false;
+        return;
+      }
+
+      // ④ commit & push
+      await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
+      await execAsync(`git push ${remote} HEAD:main`,          { cwd: __dirname });
       _syncStatus.lastPushAt      = new Date().toISOString();
-      _syncStatus.lastPushResult  = 'no_change';
+      _syncStatus.lastPushResult  = 'success';
       _syncStatus.lastPushMessage = message;
       _syncStatus.lastPushError   = null;
-      return;
-    }
+      console.log(`[Git] 自動推送成功（第 ${attempt} 次）：`, message);
+      _gitPushRunning = false;
+      return;   // 成功 → 離開 retry loop
 
-    // ④ commit & push（HEAD:main 在 detached HEAD 狀態也能用）
-    await execAsync(`git commit -m "${message} [skip ci]"`, { cwd: __dirname });
-    await execAsync(`git push ${remote} HEAD:main`,          { cwd: __dirname });
-    _syncStatus.lastPushAt      = new Date().toISOString();
-    _syncStatus.lastPushResult  = 'success';
-    _syncStatus.lastPushMessage = message;
-    _syncStatus.lastPushError   = null;
-    console.log('[Git] 自動推送成功：', message);
-    // 注意：資料推送（watchlist / config）不再觸發 Render 重新部署。
-    // 每次 redeploy 都會建立新實例讀 GitHub 舊資料，反而造成改名/新增被覆蓋。
-    // 程式碼更新時由 Render Dashboard 或 GitHub auto-deploy 手動觸發部署即可。
-  } catch (e) {
-    _syncStatus.lastPushAt      = new Date().toISOString();
-    _syncStatus.lastPushResult  = 'failed';
-    _syncStatus.lastPushError   = e.stderr || e.message;
-    console.warn('[Git] 自動推送失敗:', e.stderr || e.message);
+    } catch (e) {
+      const errMsg = e.stderr || e.message || String(e);
+      console.warn(`[Git] 推送失敗（第 ${attempt}/${MAX_RETRY} 次）:`, errMsg);
+      if (attempt === MAX_RETRY) {
+        _syncStatus.lastPushAt      = new Date().toISOString();
+        _syncStatus.lastPushResult  = 'failed';
+        _syncStatus.lastPushError   = errMsg;
+        _gitPushRunning = false;
+      } else {
+        // 等待後重試（re-fetch 可拿到最新 remote HEAD，避免 non-fast-forward）
+        await new Promise(r => setTimeout(r, 800 * attempt));
+      }
+    }
   }
 }
 
