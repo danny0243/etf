@@ -401,49 +401,44 @@ async function withCache(key, ttlMs, fn) {
   return result;
 }
 
-// ── 抓取 ETF 淨值（NAV）快取 4 小時────────────────────────────
-let _navMap = {};
-let _navMapAt = 0;
+// ── 抓取 ETF 淨值（NAV）快取 6 小時────────────────────────────
+// 資料來源：goodinfo.tw 個股頁面（每股淨值欄位），以 regex 解析 HTML
+const _navCache = new Map(); // stockNo -> { nav, ts }
 
-async function fetchAllETFNavMap() {
-  if (Date.now() - _navMapAt < 4 * 3600_000 && Object.keys(_navMap).length > 0) return _navMap;
-  const map = {};
-  // ① TWSE（上市 ETF）
+async function fetchETFNav(stockNo) {
+  const cached = _navCache.get(stockNo);
+  if (cached && Date.now() - cached.ts < 6 * 3600_000) return cached.nav;
+
   try {
-    const res = await fetch('https://www.twse.com.tw/fund/ETFtoNav?response=json', {
-      headers: TWSE_HEADERS, signal: AbortSignal.timeout(10000),
+    const url = `https://goodinfo.tw/tw/StockInfo.asp?STOCK_ID=${stockNo}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-TW,zh;q=0.9',
+        'Referer': 'https://goodinfo.tw/tw/index.asp',
+      },
+      signal: AbortSignal.timeout(12000),
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.stat === 'OK' && Array.isArray(data.data)) {
-        for (const row of data.data) {
-          const code = String(row[0]).trim();
-          const nav  = parseFloat(String(row[2]).replace(/,/g, ''));
-          if (code && !isNaN(nav) && nav > 0) map[code] = nav;
-        }
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // 比對「每股淨值」後面緊接的數字，例如：每股淨值</td><td ...>143.61</td>
+    const m = html.match(/每股淨值[^<]*<\/[^>]+>\s*<[^>]+>\s*([\d,]+\.?\d*)/);
+    if (m) {
+      const nav = parseFloat(m[1].replace(/,/g, ''));
+      if (!isNaN(nav) && nav > 0) {
+        _navCache.set(stockNo, { nav, ts: Date.now() });
+        return nav;
       }
     }
-  } catch (e) { console.warn('[NAV] TWSE fetch failed:', e.message); }
-  // ② TPEx（上櫃 ETF）
-  try {
-    const res = await fetch('https://www.tpex.org.tw/web/fund/etf/daily_nav.php?l=zh-tw', {
-      headers: { 'User-Agent': TWSE_HEADERS['User-Agent'], 'Referer': 'https://www.tpex.org.tw/' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.aaData)) {
-        for (const row of data.aaData) {
-          const code = String(row[0]).trim();
-          const nav  = parseFloat(String(row[3]).replace(/,/g, ''));
-          if (code && !isNaN(nav) && nav > 0) map[code] = nav;
-        }
-      }
-    }
-  } catch (e) { console.warn('[NAV] TPEx fetch failed:', e.message); }
-  if (Object.keys(map).length > 0) { _navMap = map; _navMapAt = Date.now(); }
-  return _navMap;
+  } catch (e) { console.warn(`[NAV] goodinfo fetch failed for ${stockNo}:`, e.message); }
+
+  return null;
 }
+
+// 相容舊呼叫介面（回傳 map，但僅供單一 stock 查詢）
+async function fetchAllETFNavMap() { return {}; }
 
 // ── 台灣股票中文名稱對照表（常用 ETF + 個股）─────────────────
 const TW_NAMES = {
@@ -1078,8 +1073,7 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
     const stockNo = ticker.replace('.TW', '').replace('.TWO', '');
     let nav = null, premiumPct = null;
     try {
-      const navMap = await fetchAllETFNavMap();
-      nav = navMap[stockNo] ?? null;
+      nav = await fetchETFNav(stockNo);
       if (nav && currentPrice) {
         premiumPct = Math.round((currentPrice - nav) / nav * 10000) / 100;
       }
