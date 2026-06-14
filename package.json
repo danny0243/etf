@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -14,5 +16,8 @@
     "firebase-admin": "^13.10.0",
     "web-push": "^3.6.7",
     "yahoo-finance2": "^2.11.3"
+  },
+  "devDependencies": {
+    "wrangler": "^4.100.0"
   }
 }
