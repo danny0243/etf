@@ -11,3 +11,9 @@ config/push_subs.json
 # 環境變數
 .env
 .env.local
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
