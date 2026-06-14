@@ -843,24 +843,6 @@ function buildFillHTML(fill) {
         <div class="fs-value" style="color:var(--accent)">第 ${fill.avgTroughDay} 天</div>
         <div class="fs-sub">除息後</div>
       </div>
-      ${(() => {
-        if (fill.nav != null && fill.premiumPct != null) {
-          const p = fill.premiumPct;
-          const pColor = p > 5 ? 'var(--red)' : p > 3 ? '#ff8c00' : p > 1.5 ? 'var(--yellow)' : p > 0 ? 'var(--muted)' : 'var(--accent2)';
-          const pLabel = p > 5 ? '⛔ 溢價極高' : p > 3 ? '⚠️ 溢價偏高' : p > 1.5 ? '溢價略高' : p > 0 ? '小幅溢價' : p < -1 ? '📉 折價' : '接近淨值';
-          const pSign = p >= 0 ? '+' : '';
-          return `<div class="fill-stat" style="${p > 3 ? 'border:1px solid var(--red);border-radius:6px;padding:8px;' : ''}">
-            <div class="fs-label">溢價／折價</div>
-            <div class="fs-value" style="color:${pColor}">${pSign}${fmt(p, 2)}%</div>
-            <div class="fs-sub">${pLabel}｜淨值 ${fmt(fill.nav)}</div>
-          </div>`;
-        }
-        return `<div class="fill-stat">
-          <div class="fs-label">溢價／折價</div>
-          <div class="fs-value" style="color:var(--muted)">—</div>
-          <div class="fs-sub">淨值資料暫無</div>
-        </div>`;
-      })()}
     </div>
 
     ${fill.buyLow != null ? `

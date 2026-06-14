@@ -401,45 +401,6 @@ async function withCache(key, ttlMs, fn) {
   return result;
 }
 
-// ── 抓取 ETF 淨值（NAV）快取 6 小時────────────────────────────
-// 資料來源：goodinfo.tw 個股頁面（每股淨值欄位），以 regex 解析 HTML
-const _navCache = new Map(); // stockNo -> { nav, ts }
-
-async function fetchETFNav(stockNo) {
-  const cached = _navCache.get(stockNo);
-  if (cached && Date.now() - cached.ts < 6 * 3600_000) return cached.nav;
-
-  try {
-    const url = `https://goodinfo.tw/tw/StockInfo.asp?STOCK_ID=${stockNo}`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'zh-TW,zh;q=0.9',
-        'Referer': 'https://goodinfo.tw/tw/index.asp',
-      },
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-
-    // 比對「每股淨值」後面緊接的數字，例如：每股淨值</td><td ...>143.61</td>
-    const m = html.match(/每股淨值[^<]*<\/[^>]+>\s*<[^>]+>\s*([\d,]+\.?\d*)/);
-    if (m) {
-      const nav = parseFloat(m[1].replace(/,/g, ''));
-      if (!isNaN(nav) && nav > 0) {
-        _navCache.set(stockNo, { nav, ts: Date.now() });
-        return nav;
-      }
-    }
-  } catch (e) { console.warn(`[NAV] goodinfo fetch failed for ${stockNo}:`, e.message); }
-
-  return null;
-}
-
-// 相容舊呼叫介面（回傳 map，但僅供單一 stock 查詢）
-async function fetchAllETFNavMap() { return {}; }
-
 // ── 台灣股票中文名稱對照表（常用 ETF + 個股）─────────────────
 const TW_NAMES = {
   '0050':'元大台灣50','0051':'元大中型100','0052':'富邦科技',
@@ -1069,16 +1030,6 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
     const buyWindowStart = new Date(baseExMs + avgIntervalMs + (avgTroughDay - 3) * 86400000).toISOString().split('T')[0];
     const buyWindowEnd   = new Date(baseExMs + avgIntervalMs + (avgTroughDay + 5) * 86400000).toISOString().split('T')[0];
 
-    // 抓取 ETF 淨值，計算溢價率
-    const stockNo = ticker.replace('.TW', '').replace('.TWO', '');
-    let nav = null, premiumPct = null;
-    try {
-      nav = await fetchETFNav(stockNo);
-      if (nav && currentPrice) {
-        premiumPct = Math.round((currentPrice - nav) / nav * 10000) / 100;
-      }
-    } catch {}
-
     // 決策邏輯
     let signal = 'UNKNOWN', signalReason = '';
     if (fillRate < 40) {
@@ -1100,23 +1051,6 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
         signal = 'HOLD'; signalReason = `已過最佳買入窗口（平均 ${avgFillDays} 天），持倉等填息`;
       } else {
         signal = 'WAIT'; signalReason = `尚未到達甜蜜點，預計還有 ${(avgDepth - stdDepth - currentDropPct).toFixed(1)}% 空間`;
-      }
-    }
-
-    // ── 溢價修正（僅對買入信號有效）────────────────────────────
-    // 溢價 > 3%：BUY_STRONG 降為 BUY；BUY 降為 WAIT
-    // 溢價 > 5%：任何買入信號強制改為 AVOID
-    if (premiumPct !== null && premiumPct > 0) {
-      const isBuySignal = signal === 'BUY' || signal === 'BUY_STRONG';
-      const premiumNote = `ETF 目前溢價 +${premiumPct.toFixed(2)}%（淨值 ${nav}）`;
-      if (premiumPct > 5 && isBuySignal) {
-        signal = 'AVOID';
-        signalReason = `${premiumNote}，溢價過高，買入即虧損，不建議進場`;
-      } else if (premiumPct > 3 && isBuySignal) {
-        signal = signal === 'BUY_STRONG' ? 'BUY' : 'WAIT';
-        signalReason = `${premiumNote}，溢價偏高；原因：${signalReason}`;
-      } else if (premiumPct > 1.5 && isBuySignal) {
-        signalReason = `⚠️ ${premiumNote}，建議等溢價收斂後再進場；${signalReason}`;
       }
     }
 
@@ -1207,7 +1141,6 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
       avgTroughDay, totalAnalyzed: analyses.length, filledCount: filled.length,
       buyLow, buyMid, buyHigh,
       currentPrice: currentPrice ? Math.round(currentPrice * 100) / 100 : null,
-      nav, premiumPct,
       daysSinceLastExDiv: daysSince,
       lastExDiv: last ? {
         date:      actualLastExDate,          // 實際最新除息日（修正版）
