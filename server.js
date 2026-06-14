@@ -401,6 +401,24 @@ async function withCache(key, ttlMs, fn) {
   return result;
 }
 
+// ── RSI 計算（Wilder 平滑法）─────────────────────────────────
+function calcRSI(prices, period = 14) {
+  if (!prices || prices.length < period + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = prices[i] - prices[i - 1];
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  let avgGain = gains / period, avgLoss = losses / period;
+  for (let i = period + 1; i < prices.length; i++) {
+    const diff = prices[i] - prices[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(0, diff)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -diff)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  return Math.round((100 - 100 / (1 + avgGain / avgLoss)) * 100) / 100;
+}
+
 // ── 台灣股票中文名稱對照表（常用 ETF + 個股）─────────────────
 const TW_NAMES = {
   '0050':'元大台灣50','0051':'元大中型100','0052':'富邦科技',
@@ -1030,6 +1048,40 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
     const buyWindowStart = new Date(baseExMs + avgIntervalMs + (avgTroughDay - 3) * 86400000).toISOString().split('T')[0];
     const buyWindowEnd   = new Date(baseExMs + avgIntervalMs + (avgTroughDay + 5) * 86400000).toISOString().split('T')[0];
 
+    // ── 大盤趨勢 & 技術指標 ───────────────────────────────────────
+    let marketCondition = { trend: 'NEUTRAL', twiiChange20d: null, twiiVs60MA: null };
+    let rsi14 = null, etfChange20d = null, relativeStrength = null, dividendYield = null;
+    try {
+      const twiiData = await fetchYFChart('^TWII', '1d', '3mo');
+      const twiiCloses = twiiData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(v => v != null) ?? [];
+      if (twiiCloses.length >= 21) {
+        const curr = twiiCloses.at(-1);
+        const twiiChange20d = Math.round((curr - twiiCloses.at(-21)) / twiiCloses.at(-21) * 10000) / 100;
+        const ma60Arr = twiiCloses.slice(-60);
+        const ma60 = ma60Arr.reduce((s, v) => s + v, 0) / ma60Arr.length;
+        const twiiVs60MA = Math.round((curr - ma60) / ma60 * 10000) / 100;
+        marketCondition = {
+          trend: twiiVs60MA < -3 ? 'BEAR' : twiiVs60MA > 3 ? 'BULL' : 'NEUTRAL',
+          twiiChange20d, twiiVs60MA,
+        };
+      }
+    } catch {}
+
+    const recentCloses = sortedDates.slice(-30).map(d => priceMap[d]).filter(v => v != null);
+    rsi14 = calcRSI(recentCloses);
+    if (recentCloses.length >= 21) {
+      etfChange20d = Math.round((recentCloses.at(-1) - recentCloses.at(-21)) / recentCloses.at(-21) * 10000) / 100;
+    }
+    if (etfChange20d != null && marketCondition.twiiChange20d != null) {
+      relativeStrength = Math.round((etfChange20d - marketCondition.twiiChange20d) * 100) / 100;
+    }
+    const oneYearAgoTs = Date.now() / 1000 - 365 * 86400;
+    const annualDivAmt = divList.filter(d => d.date >= oneYearAgoTs).reduce((s, d) => s + d.amount, 0);
+    if (currentPrice && annualDivAmt > 0) {
+      const yieldPct = Math.round(annualDivAmt / currentPrice * 10000) / 100;
+      dividendYield = { annualDiv: Math.round(annualDivAmt * 1000) / 1000, yieldPct, yieldGrade: yieldPct >= 6 ? 'HIGH' : yieldPct >= 4 ? 'MID' : 'LOW' };
+    }
+
     // 決策邏輯
     let signal = 'UNKNOWN', signalReason = '';
     if (fillRate < 40) {
@@ -1051,6 +1103,32 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
         signal = 'HOLD'; signalReason = `已過最佳買入窗口（平均 ${avgFillDays} 天），持倉等填息`;
       } else {
         signal = 'WAIT'; signalReason = `尚未到達甜蜜點，預計還有 ${(avgDepth - stdDepth - currentDropPct).toFixed(1)}% 空間`;
+      }
+    }
+
+    // ── 大盤環境信號調整 ──────────────────────────────────────────
+    let marketAdjustment = null;
+    {
+      const isBear = marketCondition.trend === 'BEAR';
+      const yieldPct = dividendYield?.yieldPct ?? 0;
+      const isSuperOversold = rsi14 != null && rsi14 < 30 && yieldPct >= 7;
+      const isOversold      = rsi14 != null && rsi14 < 35 && yieldPct >= 5;
+
+      if (isBear && ['BUY_STRONG', 'BUY', 'WAIT'].includes(signal)) {
+        if (isSuperOversold) {
+          signal = 'BUY_STRONG';
+          marketAdjustment = { type: 'UPGRADE', reason: `熊市超跌：RSI ${rsi14} 超賣＋殖利率 ${yieldPct.toFixed(1)}%，逢低分批進場` };
+        } else if (isOversold && signal === 'WAIT') {
+          signal = 'BUY';
+          marketAdjustment = { type: 'UPGRADE', reason: `RSI 偏低 (${rsi14})＋殖利率 ${yieldPct.toFixed(1)}% 具吸引力` };
+        } else if (signal !== 'WAIT' && yieldPct < 4) {
+          signal = signal === 'BUY_STRONG' ? 'BUY' : 'WAIT';
+          marketAdjustment = { type: 'DOWNGRADE', reason: `大盤走弱（偏離60MA ${marketCondition.twiiVs60MA?.toFixed(1)}%）且殖利率 ${yieldPct.toFixed(1)}% 不足，信號降級` };
+        } else {
+          marketAdjustment = { type: 'WARN', reason: `大盤走弱中，殖利率 ${yieldPct.toFixed(1)}% 有支撐，建議分批進場` };
+        }
+      } else if (marketCondition.trend === 'BULL' && ['BUY_STRONG', 'BUY'].includes(signal)) {
+        marketAdjustment = { type: 'CONFIRM', reason: `大盤多頭格局有利，填息機率提升` };
       }
     }
 
@@ -1154,6 +1232,8 @@ app.get('/api/stock/:symbol/fill-analysis', requireAuth, async (req, res) => {
       // 週期賣出點彙總（含最高/平均/最低）
       avgCapGainPct, avgTotalRetPct, avgDayToMax,
       capGainStat, totalRetStat, dayToMaxStat,
+      // 大盤環境 & 技術指標
+      marketCondition, rsi14, etfChange20d, relativeStrength, dividendYield, marketAdjustment,
       history: analyses,
     });
   } catch (err) {

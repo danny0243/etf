@@ -759,6 +759,16 @@ function buildFillHTML(fill) {
   const frColor = fill.fillRate >= 80 ? 'var(--accent2)' : fill.fillRate >= 50 ? 'var(--yellow)' : 'var(--red)';
   const fdColor = fill.avgFillDays <= 20 ? 'var(--accent2)' : fill.avgFillDays <= 60 ? 'var(--yellow)' : 'var(--red)';
 
+  // 大盤狀況顯示變數
+  const mc = fill.marketCondition || {};
+  const mcTrend   = mc.trend || 'NEUTRAL';
+  const mcLabel   = { BULL: '多頭', BEAR: '空頭', NEUTRAL: '中性' }[mcTrend];
+  const mcIcon    = { BULL: '📈', BEAR: '📉', NEUTRAL: '➡️' }[mcTrend];
+  const mcColor   = { BULL: 'var(--accent2)', BEAR: 'var(--red)', NEUTRAL: 'var(--muted)' }[mcTrend];
+  const mcBgColor = { BULL: 'rgba(0,208,132,0.08)', BEAR: 'rgba(255,77,109,0.08)', NEUTRAL: 'rgba(124,133,162,0.05)' }[mcTrend];
+  const ma = fill.marketAdjustment;
+  const maIconMap = { UPGRADE: '⬆', DOWNGRADE: '⬇', WARN: '⚠', CONFIRM: '✔' };
+
   // 目前跌幅 vs 除息前
   let currentDropHTML = '';
   if (fill.currentPrice && fill.lastExDiv) {
@@ -822,6 +832,19 @@ function buildFillHTML(fill) {
       </div>
     </div>
 
+    <!-- 大盤狀況列 -->
+    ${mc.trend ? `
+    <div style="display:flex;align-items:flex-start;gap:10px;background:${mcBgColor};border:1px solid ${mcColor}44;border-radius:8px;padding:10px 14px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:5px;white-space:nowrap">
+        <span>${mcIcon}</span>
+        <span style="color:var(--muted);font-size:.8rem">大盤</span>
+        <span style="color:${mcColor};font-weight:700;font-size:.9rem">${mcLabel}</span>
+        ${mc.twiiVs60MA != null ? `<span style="color:var(--muted);font-size:.75rem">&nbsp;60MA偏離 ${mc.twiiVs60MA > 0 ? '+' : ''}${mc.twiiVs60MA.toFixed(1)}%</span>` : ''}
+        ${mc.twiiChange20d != null ? `<span style="color:${mc.twiiChange20d >= 0 ? 'var(--accent2)' : 'var(--red)'};font-size:.75rem">&nbsp;20日${mc.twiiChange20d >= 0 ? '+' : ''}${mc.twiiChange20d.toFixed(1)}%</span>` : ''}
+      </div>
+      ${ma ? `<div style="flex:1;min-width:180px;color:var(--muted);font-size:.8rem">${maIconMap[ma.type] ?? ''} ${ma.reason}</div>` : ''}
+    </div>` : ''}
+
     <div class="fill-stats-grid">
       <div class="fill-stat">
         <div class="fs-label">填息率</div>
@@ -843,6 +866,24 @@ function buildFillHTML(fill) {
         <div class="fs-value" style="color:var(--accent)">第 ${fill.avgTroughDay} 天</div>
         <div class="fs-sub">除息後</div>
       </div>
+      ${fill.dividendYield ? `
+      <div class="fill-stat">
+        <div class="fs-label">年化殖利率</div>
+        <div class="fs-value" style="color:${fill.dividendYield.yieldGrade === 'HIGH' ? 'var(--accent2)' : fill.dividendYield.yieldGrade === 'MID' ? 'var(--yellow)' : 'var(--red)'}">${fmt(fill.dividendYield.yieldPct, 1)}%</div>
+        <div class="fs-sub">年配 ${fmt(fill.dividendYield.annualDiv)} 元</div>
+      </div>` : ''}
+      ${fill.rsi14 != null ? `
+      <div class="fill-stat">
+        <div class="fs-label">RSI 14</div>
+        <div class="fs-value" style="color:${fill.rsi14 < 30 ? 'var(--accent2)' : fill.rsi14 > 70 ? 'var(--red)' : 'var(--yellow)'}">${fmt(fill.rsi14, 0)}</div>
+        <div class="fs-sub">${fill.rsi14 < 30 ? '超賣' : fill.rsi14 > 70 ? '超買' : '中性'}</div>
+      </div>` : ''}
+      ${fill.relativeStrength != null ? `
+      <div class="fill-stat">
+        <div class="fs-label">相對大盤強度</div>
+        <div class="fs-value" style="color:${fill.relativeStrength >= 0 ? 'var(--accent2)' : 'var(--red)'}">${fill.relativeStrength >= 0 ? '+' : ''}${fmt(fill.relativeStrength, 1)}%</div>
+        <div class="fs-sub">${fill.relativeStrength >= 2 ? '強於大盤' : fill.relativeStrength <= -2 ? '弱於大盤' : '近似大盤'} (20日)</div>
+      </div>` : ''}
     </div>
 
     ${fill.buyLow != null ? `
